@@ -1,266 +1,162 @@
 """
-config_manager.py - Управление конфигурацией приложения
-
-Модуль для загрузки, сохранения и управления настройками приложения.
-Конфигурация хранится в JSON файле, токены загружаются из .env файла.
+Config Manager - Handles configuration loading, saving, and logging
 """
-
 import json
 import os
+import logging
+from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
+# Load environment variables
+load_dotenv()
+
+CONFIG_FILE = "config.json"
+LOG_FILE = "log.txt"
 
 class ConfigManager:
-    """
-    Менеджер конфигурации приложения.
+    def __init__(self):
+        self.config = self.load_config()
+        self.setup_logging()
     
-    Атрибуты:
-        config_path (Path): Путь к файлу конфигурации
-        config (dict): Словарь с текущей конфигурацией
-        discord_token (str): Токен Discord
-        telegram_token (str): Токен Telegram бота
-    """
-    
-    def __init__(self, config_path: str = "config.json"):
-        """
-        Инициализация менеджера конфигурации.
-        
-        Args:
-            config_path: Путь к файлу конфигурации JSON
-        """
-        self.config_path = Path(config_path)
-        self.config = {}
-        self.discord_token = ""
-        self.telegram_token = ""
-        
-        # Загрузка переменных окружения из .env файла
-        load_dotenv()
-        
-        # Загрузка токенов из переменных окружения
-        self.discord_token = os.getenv("DISCORD_TOKEN", "")
-        self.telegram_token = os.getenv("TELEGRAM_BOT_TOKEN", "")
-        
-        # Загрузка или создание конфигурации
-        self.load_config()
-    
-    def load_config(self) -> dict:
-        """
-        Загрузка конфигурации из файла.
-        
-        Если файл не существует, создается конфигурация по умолчанию.
-        
-        Returns:
-            dict: Словарь с конфигурацией
-        """
+    def load_config(self):
+        """Load configuration from JSON file"""
         default_config = {
-            "telegram_chat_id": "",
             "tracked_users": [],
             "tracked_guilds": [],
-            "filter_enabled": False,
-            "keywords": []
+            "telegram_chat_id": "",
+            "discord_owner_id": "",
+            "filter_mentions_only": False,
+            "filter_keywords": [],
+            "track_voice_events": True
         }
         
-        if self.config_path.exists():
+        if os.path.exists(CONFIG_FILE):
             try:
-                with open(self.config_path, 'r', encoding='utf-8') as f:
-                    self.config = json.load(f)
-                # Добавляем отсутствующие ключи со значениями по умолчанию
-                for key, value in default_config.items():
-                    if key not in self.config:
-                        self.config[key] = value
+                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
+                    config = json.load(f)
+                    # Merge with defaults to ensure all keys exist
+                    for key, value in default_config.items():
+                        if key not in config:
+                            config[key] = value
+                    return config
             except (json.JSONDecodeError, IOError) as e:
-                print(f"Ошибка загрузки конфигурации: {e}")
-                self.config = default_config.copy()
-        else:
-            self.config = default_config.copy()
-            self.save_config()
-        
-        return self.config
+                print(f"Error loading config: {e}. Using defaults.")
+                return default_config
+        return default_config
     
-    def save_config(self) -> bool:
-        """
-        Сохранение конфигурации в файл.
-        
-        Returns:
-            bool: True если успешно, False иначе
-        """
+    def save_config(self):
+        """Save configuration to JSON file"""
         try:
-            with open(self.config_path, 'w', encoding='utf-8') as f:
-                json.dump(self.config, f, indent=4, ensure_ascii=False)
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                json.dump(self.config, f, indent=2, ensure_ascii=False)
             return True
         except IOError as e:
-            print(f"Ошибка сохранения конфигурации: {e}")
+            print(f"Error saving config: {e}")
             return False
     
-    def get_telegram_chat_id(self) -> str:
-        """Получение Telegram chat_id."""
-        return self.config.get("telegram_chat_id", "")
-    
-    def set_telegram_chat_id(self, chat_id: str) -> None:
-        """
-        Установка Telegram chat_id.
+    def setup_logging(self):
+        """Setup logging to file and console"""
+        self.logger = logging.getLogger('DiscordToTelegram')
+        self.logger.setLevel(logging.INFO)
         
-        Args:
-            chat_id: ID чата Telegram
-        """
-        self.config["telegram_chat_id"] = chat_id
-    
-    def get_tracked_users(self) -> list:
-        """Получение списка отслеживаемых пользователей."""
-        return self.config.get("tracked_users", [])
-    
-    def add_tracked_user(self, user_id: str) -> bool:
-        """
-        Добавление пользователя в список отслеживаемых.
+        # Clear existing handlers
+        self.logger.handlers.clear()
         
-        Args:
-            user_id: Discord ID пользователя
-            
-        Returns:
-            bool: True если добавлен, False если уже существует
-        """
-        user_id = str(user_id).strip()
-        if user_id and user_id not in self.config.get("tracked_users", []):
-            if "tracked_users" not in self.config:
-                self.config["tracked_users"] = []
-            self.config["tracked_users"].append(user_id)
-            return True
+        # File handler
+        file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
+        file_handler.setLevel(logging.INFO)
+        
+        # Console handler
+        console_handler = logging.StreamHandler()
+        console_handler.setLevel(logging.INFO)
+        
+        # Formatter
+        formatter = logging.Formatter(
+            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S'
+        )
+        file_handler.setFormatter(formatter)
+        console_handler.setFormatter(formatter)
+        
+        self.logger.addHandler(file_handler)
+        self.logger.addHandler(console_handler)
+    
+    def get_env_value(self, key, default=None):
+        """Get value from environment variables"""
+        return os.getenv(key, default)
+    
+    def add_tracked_user(self, user_id):
+        """Add a tracked Discord user ID"""
+        if user_id and user_id not in self.config["tracked_users"]:
+            self.config["tracked_users"].append(str(user_id))
+            return self.save_config()
         return False
     
-    def remove_tracked_user(self, user_id: str) -> bool:
-        """
-        Удаление пользователя из списка отслеживаемых.
-        
-        Args:
-            user_id: Discord ID пользователя
-            
-        Returns:
-            bool: True если удален, False если не найден
-        """
-        user_id = str(user_id).strip()
-        users = self.config.get("tracked_users", [])
-        if user_id in users:
-            users.remove(user_id)
-            return True
+    def remove_tracked_user(self, user_id):
+        """Remove a tracked Discord user ID"""
+        if str(user_id) in self.config["tracked_users"]:
+            self.config["tracked_users"].remove(str(user_id))
+            return self.save_config()
         return False
     
-    def get_tracked_guilds(self) -> list:
-        """Получение списка отслеживаемых серверов."""
-        return self.config.get("tracked_guilds", [])
-    
-    def add_tracked_guild(self, guild_id: str) -> bool:
-        """
-        Добавление сервера в список отслеживаемых.
-        
-        Args:
-            guild_id: Discord ID сервера
-            
-        Returns:
-            bool: True если добавлен, False если уже существует
-        """
-        guild_id = str(guild_id).strip()
-        if guild_id and guild_id not in self.config.get("tracked_guilds", []):
-            if "tracked_guilds" not in self.config:
-                self.config["tracked_guilds"] = []
-            self.config["tracked_guilds"].append(guild_id)
-            return True
+    def add_tracked_guild(self, guild_id):
+        """Add a tracked Discord guild ID"""
+        if guild_id and guild_id not in self.config["tracked_guilds"]:
+            self.config["tracked_guilds"].append(str(guild_id))
+            return self.save_config()
         return False
     
-    def remove_tracked_guild(self, guild_id: str) -> bool:
-        """
-        Удаление сервера из списка отслеживаемых.
-        
-        Args:
-            guild_id: Discord ID сервера
-            
-        Returns:
-            bool: True если удален, False если не найден
-        """
-        guild_id = str(guild_id).strip()
-        guilds = self.config.get("tracked_guilds", [])
-        if guild_id in guilds:
-            guilds.remove(guild_id)
-            return True
+    def remove_tracked_guild(self, guild_id):
+        """Remove a tracked Discord guild ID"""
+        if str(guild_id) in self.config["tracked_guilds"]:
+            self.config["tracked_guilds"].remove(str(guild_id))
+            return self.save_config()
         return False
     
-    def is_filter_enabled(self) -> bool:
-        """Проверка включен ли фильтр сообщений."""
-        return self.config.get("filter_enabled", False)
+    def set_telegram_chat_id(self, chat_id):
+        """Set Telegram chat ID for notifications"""
+        self.config["telegram_chat_id"] = str(chat_id)
+        return self.save_config()
     
-    def set_filter_enabled(self, enabled: bool) -> None:
-        """
-        Включение/выключение фильтра сообщений.
-        
-        Args:
-            enabled: True для включения, False для выключения
-        """
-        self.config["filter_enabled"] = enabled
+    def set_discord_owner_id(self, owner_id):
+        """Set Discord owner ID for mention filtering"""
+        self.config["discord_owner_id"] = str(owner_id)
+        return self.save_config()
     
-    def get_keywords(self) -> list:
-        """Получение списка ключевых слов для фильтра."""
-        return self.config.get("keywords", [])
+    def set_filter_mentions_only(self, enabled):
+        """Enable/disable mention-only filter"""
+        self.config["filter_mentions_only"] = enabled
+        return self.save_config()
     
-    def add_keyword(self, keyword: str) -> bool:
-        """
-        Добавление ключевого слова в фильтр.
-        
-        Args:
-            keyword: Ключевое слово
-            
-        Returns:
-            bool: True если добавлено, False если уже существует
-        """
-        keyword = str(keyword).strip().lower()  # Конвертируем в lowercase перед проверкой
-        if keyword and keyword not in self.config.get("keywords", []):
-            if "keywords" not in self.config:
-                self.config["keywords"] = []
-            self.config["keywords"].append(keyword)
-            return True
+    def set_track_voice_events(self, enabled):
+        """Enable/disable voice event tracking"""
+        self.config["track_voice_events"] = enabled
+        return self.save_config()
+    
+    def add_keyword(self, keyword):
+        """Add a keyword filter"""
+        if keyword and keyword not in self.config["filter_keywords"]:
+            self.config["filter_keywords"].append(keyword)
+            return self.save_config()
         return False
     
-    def remove_keyword(self, keyword: str) -> bool:
-        """
-        Удаление ключевого слова из фильтра.
-        
-        Args:
-            keyword: Ключевое слово
-            
-        Returns:
-            bool: True если удалено, False если не найдено
-        """
-        keyword = str(keyword).strip().lower()
-        keywords = self.config.get("keywords", [])
-        if keyword in keywords:
-            keywords.remove(keyword)
-            return True
+    def remove_keyword(self, keyword):
+        """Remove a keyword filter"""
+        if keyword in self.config["filter_keywords"]:
+            self.config["filter_keywords"].remove(keyword)
+            return self.save_config()
         return False
     
-    def should_forward_message(self, content: str, mentioned_user_ids: list, 
-                               owner_id: str = None) -> bool:
-        """
-        Проверка должно ли сообщение быть переслано на основе фильтра.
-        
-        Args:
-            content: Текст сообщения
-            mentioned_user_ids: Список ID упомянутых пользователей
-            owner_id: ID владельца (для проверки упоминания)
-            
-        Returns:
-            bool: True если сообщение должно быть переслано
-        """
-        if not self.is_filter_enabled():
-            return True
-        
-        content_lower = content.lower()
-        
-        # Проверка упоминания владельца
-        if owner_id and str(owner_id) in mentioned_user_ids:
-            return True
-        
-        # Проверка ключевых слов
-        for keyword in self.get_keywords():
-            if keyword in content_lower:
-                return True
-        
-        return False
+    def get_log_content(self, lines=100):
+        """Get last N lines from log file"""
+        try:
+            with open(LOG_FILE, 'r', encoding='utf-8') as f:
+                all_lines = f.readlines()
+                return ''.join(all_lines[-lines:])
+        except IOError:
+            return "Log file not found or cannot be read."
+
+
+# Global config manager instance
+config_manager = ConfigManager()

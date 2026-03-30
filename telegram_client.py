@@ -1,98 +1,51 @@
 """
-telegram_client.py - Клиент для отправки сообщений в Telegram
-
-Модуль для отправки уведомлений в Telegram через Bot API.
+Telegram Client - Handles sending notifications to Telegram
 """
-
-import logging
-from typing import Optional, List
+import asyncio
 from telegram import Bot
 from telegram.error import TelegramError
-
-
-logger = logging.getLogger(__name__)
-
+from config_manager import config_manager
 
 class TelegramClient:
-    """
-    Клиент для отправки сообщений в Telegram.
+    def __init__(self):
+        self.bot = None
+        self.token = None
+        self.chat_id = None
+        self.initialized = False
     
-    Атрибуты:
-        bot_token (str): Токен Telegram бота
-        chat_id (str): ID чата для отправки сообщений
-        bot (Bot): Экземпляр бота Telegram
-    """
-    
-    def __init__(self, bot_token: str, chat_id: str):
-        """
-        Инициализация Telegram клиента.
-        
-        Args:
-            bot_token: Токен Telegram бота
-            chat_id: ID чата для отправки сообщений
-        """
-        self.bot_token = bot_token
-        self.chat_id = chat_id
-        self.bot: Optional[Bot] = None
-        
-        if bot_token:
-            self._initialize_bot()
-    
-    def _initialize_bot(self) -> None:
-        """Инициализация бота Telegram."""
+    def initialize(self):
+        """Initialize Telegram bot with token from .env"""
         try:
-            self.bot = Bot(token=self.bot_token)
-            logger.info("Telegram бот инициализирован")
-        except Exception as e:
-            logger.error(f"Ошибка инициализации Telegram бота: {e}")
-            self.bot = None
-    
-    def set_chat_id(self, chat_id: str) -> None:
-        """
-        Установка ID чата для отправки сообщений.
-        
-        Args:
-            chat_id: ID чата Telegram
-        """
-        self.chat_id = chat_id
-        logger.info(f"Telegram chat_id установлен: {chat_id}")
-    
-    def update_bot_token(self, bot_token: str) -> bool:
-        """
-        Обновление токена бота.
-        
-        Args:
-            bot_token: Новый токен Telegram бота
+            self.token = config_manager.get_env_value('TELEGRAM_BOT_TOKEN')
+            if not self.token:
+                config_manager.logger.error("Telegram bot token not found in .env")
+                return False
             
-        Returns:
-            bool: True если успешно
-        """
-        self.bot_token = bot_token
-        try:
-            self.bot = Bot(token=bot_token)
-            logger.info("Токен Telegram бота обновлен")
+            self.bot = Bot(token=self.token)
+            self.chat_id = config_manager.config.get('telegram_chat_id')
+            
+            if not self.chat_id:
+                config_manager.logger.error("Telegram chat ID not configured")
+                return False
+            
+            self.initialized = True
+            config_manager.logger.info("Telegram client initialized successfully")
             return True
         except Exception as e:
-            logger.error(f"Ошибка обновления токена Telegram бота: {e}")
-            self.bot = None
+            config_manager.logger.error(f"Failed to initialize Telegram client: {e}")
             return False
     
-    async def send_message(self, message: str, 
-                          parse_mode: str = None,
-                          disable_notification: bool = False) -> bool:
-        """
-        Отправка текстового сообщения в Telegram.
+    async def send_message(self, message, parse_mode='HTML'):
+        """Send a message to the configured Telegram chat"""
+        if not self.initialized:
+            if not self.initialize():
+                return False
         
-        Args:
-            message: Текст сообщения
-            parse_mode: Режим парсинга (Markdown, HTML, etc.)
-            disable_notification: Отправить без звука
-            
-        Returns:
-            bool: True если успешно отправлено
-        """
-        if not self.bot or not self.chat_id:
-            logger.error("Telegram бот не инициализирован или chat_id не установлен")
+        # Update chat_id from config (in case it changed)
+        self.chat_id = config_manager.config.get('telegram_chat_id')
+        
+        if not self.chat_id:
+            config_manager.logger.error("Telegram chat ID not set")
             return False
         
         try:
@@ -100,114 +53,78 @@ class TelegramClient:
                 chat_id=self.chat_id,
                 text=message,
                 parse_mode=parse_mode,
-                disable_notification=disable_notification
+                disable_web_page_preview=False
             )
-            logger.debug(f"Сообщение отправлено в Telegram: {message[:50]}...")
+            config_manager.logger.info(f"Message sent to Telegram: {message[:50]}...")
             return True
         except TelegramError as e:
-            logger.error(f"Ошибка отправки сообщения в Telegram: {e}")
+            config_manager.logger.error(f"Telegram error: {e}")
             return False
         except Exception as e:
-            logger.error(f"Неожиданная ошибка при отправке в Telegram: {e}")
+            config_manager.logger.error(f"Unexpected error sending Telegram message: {e}")
             return False
     
-    async def send_notification(self, 
-                               timestamp: str,
-                               guild_name: str,
-                               channel_name: str,
-                               author_name: str,
-                               author_id: str,
-                               content: str,
-                               message_url: str,
-                               attachments: List[str] = None) -> bool:
-        """
-        Отправка форматированного уведомления о сообщении Discord.
+    async def send_voice_notification(self, user_name, channel_name, guild_name, event_type):
+        """Send a voice channel event notification"""
+        emoji = "🎤" if event_type == "join" else "🔇"
+        action = "Подключился к голосовому каналу" if event_type == "join" else "Покинул голосовой канал"
         
-        Args:
-            timestamp: Время сообщения
-            guild_name: Название сервера
-            channel_name: Название канала
-            author_name: Имя автора
-            author_id: ID автора
-            content: Текст сообщения
-            message_url: Ссылка на сообщение
-            attachments: Список ссылок на вложения
-            
-        Returns:
-            bool: True если успешно отправлено
-        """
-        # Форматирование сообщения
         message = (
-            f"🔔 <b>Новое сообщение</b>\n\n"
-            f"📅 <b>Время:</b> {timestamp}\n"
-            f"🏷 <b>Сервер:</b> {guild_name}\n"
-            f"📺 <b>Канал:</b> {channel_name}\n"
-            f"👤 <b>Автор:</b> {author_name} ({author_id})\n"
-            f"💬 <b>Сообщение:</b>\n{content}\n\n"
-            f"🔗 <a href=\"{message_url}\">Открыть сообщение</a>"
+            f"{emoji} <b>{action}</b>\n"
+            f"👤 <b>Пользователь:</b> {user_name}\n"
+            f"🔊 <b>Канал:</b> {channel_name}\n"
+            f"🏠 <b>Сервер:</b> {guild_name}"
         )
         
-        # Добавление вложений
+        return await self.send_message(message)
+    
+    async def send_message_notification(self, timestamp, guild_name, channel_name, 
+                                       author_name, author_id, content, message_url, attachments):
+        """Send a message event notification"""
+        # Escape special HTML characters in content
+        safe_content = self._escape_html(content) if content else "<i>Нет текста</i>"
+        safe_author = self._escape_html(author_name)
+        safe_guild = self._escape_html(guild_name)
+        safe_channel = self._escape_html(channel_name)
+        
+        message = (
+            f"💬 <b>Новое сообщение</b>\n"
+            f"⏰ <b>Время:</b> {timestamp}\n"
+            f"🏠 <b>Сервер:</b> {safe_guild}\n"
+            f"📝 <b>Канал:</b> {safe_channel}\n"
+            f"👤 <b>Автор:</b> {safe_author} (<code>{author_id}</code>)\n"
+            f"📄 <b>Текст:</b> {safe_content}"
+        )
+        
+        if message_url:
+            message += f"\n🔗 <a href='{message_url}'>Перейти к сообщению</a>"
+        
         if attachments:
-            message += "\n\n📎 <b>Вложения:</b>\n"
-            for i, attachment in enumerate(attachments, 1):
-                message += f"{i}. {attachment}\n"
+            attach_list = "\n".join([f"📎 {att}" for att in attachments[:5]])  # Limit to 5
+            if len(attachments) > 5:
+                attach_list += f"\n... и ещё {len(attachments) - 5} вложений"
+            message += f"\n\n<b>Вложения:</b>\n{attach_list}"
         
-        # Ограничение длины сообщения (Telegram limit ~4096 символов)
-        if len(message) > 4000:
-            message = message[:4000] + "\n\n... (сообщение обрезано)"
-        
-        success = await self.send_message(message, parse_mode="HTML")
-        
-        if not success:
-            logger.warning("Не удалось отправить уведомление в Telegram")
-        
-        return success
+        return await self.send_message(message)
     
-    async def send_log_message(self, log_text: str) -> bool:
-        """
-        Отправка логов в Telegram (для отладки).
-        
-        Args:
-            log_text: Текст логов
-            
-        Returns:
-            bool: True если успешно
-        """
-        # Экранирование HTML тегов в логах
-        log_text = log_text.replace("<", "&lt;").replace(">", "&gt;")
-        
-        message = f"📋 <b>Лог приложения:</b>\n\n<pre>{log_text}</pre>"
-        
-        if len(message) > 4000:
-            message = message[:4000] + "\n\n... (лог обрезан)"
-        
-        return await self.send_message(message, parse_mode="HTML")
+    def _escape_html(self, text):
+        """Escape HTML special characters"""
+        if not text:
+            return ""
+        return (text
+                .replace('&', '&amp;')
+                .replace('<', '&lt;')
+                .replace('>', '&gt;'))
     
-    async def test_connection(self) -> bool:
-        """
-        Проверка соединения с Telegram API.
-        
-        Returns:
-            bool: True если соединение успешно
-        """
-        if not self.bot:
-            logger.error("Telegram бот не инициализирован")
-            return False
-        
+    async def test_connection(self):
+        """Test Telegram connection"""
         try:
-            # Получение информации о боте
-            me = await self.bot.get_me()
-            logger.info(f"Подключение к Telegram успешно: @{me.username}")
-            
-            # Пробная отправка сообщения
-            if self.chat_id:
-                await self.send_message("✅ Подключение к Telegram успешно!")
-            
+            await self.bot.get_me()
             return True
-        except TelegramError as e:
-            logger.error(f"Ошибка подключения к Telegram: {e}")
-            return False
         except Exception as e:
-            logger.error(f"Неожиданная ошибка при проверке подключения: {e}")
+            config_manager.logger.error(f"Telegram connection test failed: {e}")
             return False
+
+
+# Global telegram client instance
+telegram_client = TelegramClient()

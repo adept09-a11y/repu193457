@@ -1,554 +1,543 @@
 """
-main.py - Главное приложение с GUI
-
-Точка входа приложения. Создает GUI интерфейс на Tkinter,
-управляет запуском и остановкой бота.
+Main Application - GUI and application entry point
+Discord to Telegram Notification App with Tkinter GUI (Dark Theme)
 """
-
-import asyncio
-import logging
-import threading
 import tkinter as tk
 from tkinter import ttk, scrolledtext, messagebox
-from pathlib import Path
+import asyncio
+import threading
+from dotenv import load_dotenv
+import os
 
-from config_manager import ConfigManager
-from telegram_client import TelegramClient
-from bot_worker import BotWorker
+from config_manager import config_manager
+from bot_worker import bot_worker
+from telegram_client import telegram_client
 
+# Load environment variables
+load_dotenv()
 
-# Настройка логирования
-def setup_logging():
-    """Настройка системы логирования."""
-    log_file = Path("log.txt")
-    
-    # Создание форматтера
-    formatter = logging.Formatter(
-        '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
-    
-    # Обработчик файла
-    file_handler = logging.FileHandler(log_file, encoding='utf-8')
-    file_handler.setLevel(logging.DEBUG)
-    file_handler.setFormatter(formatter)
-    
-    # Консольный обработчик
-    console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.INFO)
-    console_handler.setFormatter(formatter)
-    
-    # Настройка корневого логгера
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)
-    root_logger.addHandler(file_handler)
-    root_logger.addHandler(console_handler)
-    
-    return log_file
-
-
-class LogViewer(tk.Toplevel):
-    """Окно просмотра логов."""
-    
-    def __init__(self, parent, log_file: Path):
-        super().__init__(parent)
-        self.title("Просмотр логов")
-        self.geometry("700x500")
-        self.log_file = log_file
+class DiscordToTelegramApp:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Discord → Telegram Notifications")
+        self.root.geometry("900x700")
         
-        self._create_widgets()
-        self.load_logs()
-    
-    def _create_widgets(self):
-        """Создание виджетов окна."""
-        # Кнопки
-        btn_frame = ttk.Frame(self)
-        btn_frame.pack(fill=tk.X, padx=10, pady=5)
+        # Configure dark theme colors
+        self.bg_color = "#2b2b2b"
+        self.fg_color = "#ffffff"
+        self.entry_bg = "#3c3f41"
+        self.button_bg = "#4a4a4a"
+        self.button_fg = "#ffffff"
+        self.accent_color = "#5a9fd4"
+        self.listbox_bg = "#3c3f41"
         
-        ttk.Button(btn_frame, text="Обновить", command=self.load_logs).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Очистить логи", command=self.clear_logs).pack(side=tk.LEFT, padx=5)
-        ttk.Button(btn_frame, text="Закрыть", command=self.destroy).pack(side=tk.RIGHT, padx=5)
+        # Apply dark theme to root
+        self.root.configure(bg=self.bg_color)
         
-        # Текстовое поле для логов
-        self.log_text = scrolledtext.ScrolledText(self, wrap=tk.WORD, font=("Consolas", 9))
-        self.log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        # Configure ttk styles for dark theme
+        self.setup_dark_theme()
         
-        # Настройка тегов для цветов
-        self.log_text.tag_configure("ERROR", foreground="red")
-        self.log_text.tag_configure("WARNING", foreground="orange")
-        self.log_text.tag_configure("INFO", foreground="green")
-    
-    def load_logs(self):
-        """Загрузка логов из файла."""
-        self.log_text.delete(1.0, tk.END)
-        
-        if not self.log_file.exists():
-            self.log_text.insert(tk.END, "Файл логов не найден\n")
-            return
-        
-        try:
-            with open(self.log_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    if "ERROR" in line:
-                        self.log_text.insert(tk.END, line, "ERROR")
-                    elif "WARNING" in line:
-                        self.log_text.insert(tk.END, line, "WARNING")
-                    elif "INFO" in line:
-                        self.log_text.insert(tk.END, line, "INFO")
-                    else:
-                        self.log_text.insert(tk.END, line)
-            
-            # Прокрутка вниз
-            self.log_text.see(tk.END)
-            
-        except Exception as e:
-            self.log_text.insert(tk.END, f"Ошибка чтения логов: {e}\n")
-    
-    def clear_logs(self):
-        """Очистка файла логов."""
-        if messagebox.askyesno("Подтверждение", "Очистить файл логов?"):
-            try:
-                with open(self.log_file, 'w', encoding='utf-8') as f:
-                    f.write("")
-                self.load_logs()
-            except Exception as e:
-                messagebox.showerror("Ошибка", f"Не удалось очистить логи: {e}")
-
-
-class MainWindow:
-    """Главное окно приложения."""
-    
-    def __init__(self):
-        """Инициализация главного окна."""
-        self.root = tk.Tk()
-        self.root.title("Discord to Telegram Notifier")
-        self.root.geometry("600x700")
-        self.root.resizable(True, True)
-        
-        # Настройка логирования
-        self.log_file = setup_logging()
-        self.logger = logging.getLogger(__name__)
-        self.logger.info("Приложение запущено")
-        
-        # Инициализация менеджеров
-        self.config_manager = ConfigManager()
-        self.telegram_client = TelegramClient(
-            self.config_manager.telegram_token,
-            self.config_manager.get_telegram_chat_id()
-        )
-        self.bot_worker = BotWorker(self.config_manager, self.telegram_client)
-        
-        # Настройка callback для статуса
-        self.bot_worker.on_status_change = self.update_status
-        
-        # Переменные для потока бота
+        # Bot running state
+        self.bot_running = False
+        self.loop = None
         self.bot_thread = None
-        self.bot_loop = None
-        self.stop_event = threading.Event()
         
-        # Создание интерфейса
-        self._create_widgets()
-        self._load_config_to_ui()
+        # Create UI components
+        self.create_widgets()
         
-        # Закрытие окна
-        self.root.protocol("WM_DELETE_WINDOW", self._on_closing)
+        # Load current config into UI
+        self.load_config_to_ui()
     
-    def _create_widgets(self):
-        """Создание виджетов интерфейса."""
-        main_frame = ttk.Frame(self.root, padding="10")
-        main_frame.grid(row=0, column=0, sticky=(tk.W, tk.E, tk.N, tk.S))
+    def setup_dark_theme(self):
+        """Setup dark theme for ttk widgets"""
+        style = ttk.Style()
+        style.theme_use('clam')
         
-        # Настройка растягивания
+        # Configure common styles
+        style.configure('.', background=self.bg_color, foreground=self.fg_color,
+                       fieldbackground=self.entry_bg)
+        style.configure('TLabel', background=self.bg_color, foreground=self.fg_color)
+        style.configure('TButton', background=self.button_bg, foreground=self.button_fg,
+                       borderwidth=1, focuscolor='none')
+        style.map('TButton', background=[('active', self.accent_color)])
+        style.configure('TEntry', fieldbackground=self.entry_bg, foreground=self.fg_color,
+                       borderwidth=1)
+        style.configure('TCheckbutton', background=self.bg_color, foreground=self.fg_color,
+                       indicatorbackground=self.bg_color)
+        style.map('TCheckbutton', background=[('active', self.bg_color)])
+        style.configure('Treeview', background=self.listbox_bg, foreground=self.fg_color,
+                       fieldbackground=self.listbox_bg)
+        style.configure('Treeview.Heading', background=self.button_bg, foreground=self.fg_color)
+        style.map('Treeview', background=[('selected', self.accent_color)])
+    
+    def create_widgets(self):
+        """Create all UI widgets"""
+        # Main container with padding
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, sticky="nsew")
+        
+        # Configure grid weights
         self.root.columnconfigure(0, weight=1)
         self.root.rowconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
         
         row = 0
         
-        # === Секция Telegram ===
-        ttk.Label(main_frame, text="=== Telegram настройки ===", 
-                 font=('Arial', 11, 'bold')).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
-        row += 1
+        # === Environment Variables Section ===
+        env_frame = ttk.LabelFrame(main_frame, text="🔐 Настройки .env (токены)", padding="10")
+        env_frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+        env_frame.columnconfigure(1, weight=1)
         
-        ttk.Label(main_frame, text="Chat ID:").grid(row=row, column=0, sticky=tk.W, pady=3)
-        self.chat_id_var = tk.StringVar()
-        self.chat_id_entry = ttk.Entry(main_frame, textvariable=self.chat_id_var, width=40)
-        self.chat_id_entry.grid(row=row, column=1, sticky=(tk.W, tk.E), pady=3)
-        row += 1
+        # Discord Token
+        ttk.Label(env_frame, text="Discord Token:").grid(row=0, column=0, sticky="w", pady=5)
+        self.discord_token_var = tk.StringVar()
+        self.discord_token_entry = ttk.Entry(env_frame, textvariable=self.discord_token_var, show="*")
+        self.discord_token_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=5)
         
-        # === Секция отслеживаемых пользователей ===
-        ttk.Label(main_frame, text="=== Отслеживаемые пользователи ===", 
-                 font=('Arial', 11, 'bold')).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
-        row += 1
+        # Telegram Bot Token
+        ttk.Label(env_frame, text="Telegram Bot Token:").grid(row=1, column=0, sticky="w", pady=5)
+        self.telegram_token_var = tk.StringVar()
+        self.telegram_token_entry = ttk.Entry(env_frame, textvariable=self.telegram_token_var, show="*")
+        self.telegram_token_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=5)
         
-        # Список пользователей
-        user_list_frame = ttk.LabelFrame(main_frame, text="Пользователи (Discord ID)")
-        user_list_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=3)
-        user_list_frame.columnconfigure(0, weight=1)
-        
-        self.user_listbox = tk.Listbox(user_list_frame, height=5, font=('Consolas', 9))
-        self.user_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
-        
-        # Кнопки управления пользователями
-        user_btn_frame = ttk.Frame(user_list_frame)
-        user_btn_frame.grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        
-        ttk.Button(user_btn_frame, text="Добавить", command=self.add_user).pack(side=tk.LEFT, padx=2)
-        ttk.Button(user_btn_frame, text="Удалить", command=self.remove_user).pack(side=tk.LEFT, padx=2)
-        ttk.Button(user_btn_frame, text="Очистить", command=self.clear_users).pack(side=tk.LEFT, padx=2)
+        # Save .env button
+        ttk.Button(env_frame, text="💾 Сохранить .env", command=self.save_env).grid(row=2, column=1, sticky="e", pady=5)
         
         row += 1
         
-        # === Секция отслеживаемых серверов ===
-        ttk.Label(main_frame, text="=== Отслеживаемые сервера ===", 
-                 font=('Arial', 11, 'bold')).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
-        row += 1
+        # === Telegram Settings Section ===
+        tg_frame = ttk.LabelFrame(main_frame, text="📱 Telegram Настройки", padding="10")
+        tg_frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+        tg_frame.columnconfigure(1, weight=1)
         
-        # Список серверов
-        guild_list_frame = ttk.LabelFrame(main_frame, text="Сервера (Guild ID)")
-        guild_list_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=3)
-        guild_list_frame.columnconfigure(0, weight=1)
-        
-        self.guild_listbox = tk.Listbox(guild_list_frame, height=5, font=('Consolas', 9))
-        self.guild_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
-        
-        # Кнопки управления серверами
-        guild_btn_frame = ttk.Frame(guild_list_frame)
-        guild_btn_frame.grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        
-        ttk.Button(guild_btn_frame, text="Добавить", command=self.add_guild).pack(side=tk.LEFT, padx=2)
-        ttk.Button(guild_btn_frame, text="Удалить", command=self.remove_guild).pack(side=tk.LEFT, padx=2)
-        ttk.Button(guild_btn_frame, text="Очистить", command=self.clear_guilds).pack(side=tk.LEFT, padx=2)
-        
-        row += 1
-        
-        # === Секция фильтров ===
-        ttk.Label(main_frame, text="=== Фильтры сообщений ===", 
-                 font=('Arial', 11, 'bold')).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
-        row += 1
-        
-        self.filter_enabled_var = tk.BooleanVar(value=False)
-        self.filter_check = ttk.Checkbutton(
-            main_frame, 
-            text="Включить фильтр (только упоминания владельца или ключевые слова)",
-            variable=self.filter_enabled_var
-        )
-        self.filter_check.grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=3)
-        row += 1
-        
-        # Ключевые слова
-        kw_frame = ttk.LabelFrame(main_frame, text="Ключевые слова")
-        kw_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=3)
-        kw_frame.columnconfigure(0, weight=1)
-        
-        self.kw_listbox = tk.Listbox(kw_frame, height=3, font=('Consolas', 9))
-        self.kw_listbox.grid(row=0, column=0, sticky=(tk.W, tk.E), padx=5, pady=5)
-        
-        kw_btn_frame = ttk.Frame(kw_frame)
-        kw_btn_frame.grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        
-        ttk.Button(kw_btn_frame, text="Добавить", command=self.add_keyword).pack(side=tk.LEFT, padx=2)
-        ttk.Button(kw_btn_frame, text="Удалить", command=self.remove_keyword).pack(side=tk.LEFT, padx=2)
-        
-        row += 1
-        
-        # === Секция управления ботом ===
-        ttk.Label(main_frame, text="=== Управление ботом ===", 
-                 font=('Arial', 11, 'bold')).grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
-        row += 1
-        
-        # Статус
-        status_frame = ttk.Frame(main_frame)
-        status_frame.grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=5)
-        
-        ttk.Label(status_frame, text="Статус:").pack(side=tk.LEFT, padx=5)
-        self.status_label = ttk.Label(status_frame, text="Stopped", font=('Arial', 10, 'bold'))
-        self.status_label.pack(side=tk.LEFT, padx=5)
-        
-        row += 1
-        
-        # Кнопки управления
-        control_frame = ttk.Frame(main_frame)
-        control_frame.grid(row=row, column=0, columnspan=2, sticky=tk.W, pady=10)
-        
-        self.start_btn = ttk.Button(control_frame, text="▶ Start Bot", command=self.start_bot)
-        self.start_btn.pack(side=tk.LEFT, padx=5)
-        
-        self.stop_btn = ttk.Button(control_frame, text="⏹ Stop Bot", command=self.stop_bot, state=tk.DISABLED)
-        self.stop_btn.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(control_frame, text="💾 Сохранить конфиг", command=self.save_config).pack(side=tk.LEFT, padx=5)
-        ttk.Button(control_frame, text="📋 Просмотр логов", command=self.show_logs).pack(side=tk.LEFT, padx=5)
-        
-        row += 1
-        
-        # Инфо панель
-        info_frame = ttk.LabelFrame(main_frame, text="Информация")
-        info_frame.grid(row=row, column=0, columnspan=2, sticky=(tk.W, tk.E), pady=5)
-        
-        info_text = (
-            "• Discord токен берется из .env файла\n"
-            "• Для получения Discord ID включите режим разработчика в Discord\n"
-            "• ПКМ по пользователю/серверу -> Копировать ID\n"
-            "• Userbot может нарушать ToS Discord, используйте на свой риск"
-        )
-        ttk.Label(info_frame, text=info_text, justify=tk.LEFT).pack(anchor=tk.W, padx=10, pady=10)
-    
-    def _load_config_to_ui(self):
-        """Загрузка конфигурации в элементы UI."""
         # Chat ID
-        self.chat_id_var.set(self.config_manager.get_telegram_chat_id())
+        ttk.Label(tg_frame, text="Telegram Chat ID:").grid(row=0, column=0, sticky="w", pady=5)
+        self.chat_id_var = tk.StringVar()
+        self.chat_id_entry = ttk.Entry(tg_frame, textvariable=self.chat_id_var)
+        self.chat_id_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=5)
         
-        # Пользователи
-        for user_id in self.config_manager.get_tracked_users():
-            self.user_listbox.insert(tk.END, user_id)
+        # Test connection button
+        ttk.Button(tg_frame, text="🧪 Тест соединения", command=self.test_telegram).grid(row=0, column=2, sticky="w", padx=(10, 0), pady=5)
         
-        # Сервера
-        for guild_id in self.config_manager.get_tracked_guilds():
-            self.guild_listbox.insert(tk.END, guild_id)
+        row += 1
         
-        # Фильтр
-        self.filter_enabled_var.set(self.config_manager.is_filter_enabled())
+        # === Discord Settings Section ===
+        disc_frame = ttk.LabelFrame(main_frame, text="🎮 Discord Настройки", padding="10")
+        disc_frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+        disc_frame.columnconfigure(1, weight=1)
         
-        # Ключевые слова
-        for keyword in self.config_manager.get_keywords():
-            self.kw_listbox.insert(tk.END, keyword)
+        # Owner ID
+        ttk.Label(disc_frame, text="Discord Owner ID:").grid(row=0, column=0, sticky="w", pady=5)
+        self.owner_id_var = tk.StringVar()
+        self.owner_id_entry = ttk.Entry(disc_frame, textvariable=self.owner_id_var)
+        self.owner_id_entry.grid(row=0, column=1, sticky="ew", padx=(10, 0), pady=5)
+        ttk.Label(disc_frame, text="(для фильтра упоминаний)", font=('TkDefaultFont', 8)).grid(row=0, column=2, sticky="w", padx=(5, 0), pady=5)
+        
+        row += 1
+        
+        # === Tracked Users Section ===
+        users_frame = ttk.LabelFrame(main_frame, text="👥 Отслеживаемые пользователи", padding="10")
+        users_frame.grid(row=row, column=0, sticky="nsew", pady=(0, 10), padx=(0, 5))
+        users_frame.columnconfigure(0, weight=1)
+        users_frame.rowconfigure(1, weight=1)
+        
+        # Add user controls
+        add_user_frame = ttk.Frame(users_frame)
+        add_user_frame.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        add_user_frame.columnconfigure(0, weight=1)
+        
+        self.add_user_var = tk.StringVar()
+        ttk.Entry(add_user_frame, textvariable=self.add_user_var, width=20).grid(row=0, column=0, sticky="ew")
+        ttk.Button(add_user_frame, text="➕ Добавить", command=self.add_user).grid(row=0, column=1, sticky="w", padx=(5, 0))
+        
+        # Users listbox
+        self.users_listbox = tk.Listbox(users_frame, bg=self.listbox_bg, fg=self.fg_color, 
+                                        selectbackground=self.accent_color, height=6)
+        self.users_listbox.grid(row=1, column=0, sticky="nsew")
+        
+        # Remove user button
+        ttk.Button(users_frame, text="➖ Удалить выбранного", command=self.remove_user).grid(row=2, column=0, sticky="e", pady=(5, 0))
+        
+        row += 1
+        
+        # === Tracked Guilds Section ===
+        guilds_frame = ttk.LabelFrame(main_frame, text="🏠 Отслеживаемые сервера", padding="10")
+        guilds_frame.grid(row=row, column=1, sticky="nsew", pady=(0, 10), padx=(0, 5))
+        guilds_frame.columnconfigure(0, weight=1)
+        guilds_frame.rowconfigure(1, weight=1)
+        
+        # Add guild controls
+        add_guild_frame = ttk.Frame(guilds_frame)
+        add_guild_frame.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        add_guild_frame.columnconfigure(0, weight=1)
+        
+        self.add_guild_var = tk.StringVar()
+        ttk.Entry(add_guild_frame, textvariable=self.add_guild_var, width=20).grid(row=0, column=0, sticky="ew")
+        ttk.Button(add_guild_frame, text="➕ Добавить", command=self.add_guild).grid(row=0, column=1, sticky="w", padx=(5, 0))
+        
+        # Guilds listbox
+        self.guilds_listbox = tk.Listbox(guilds_frame, bg=self.listbox_bg, fg=self.fg_color,
+                                         selectbackground=self.accent_color, height=6)
+        self.guilds_listbox.grid(row=1, column=0, sticky="nsew")
+        
+        # Remove guild button
+        ttk.Button(guilds_frame, text="➖ Удалить выбранный", command=self.remove_guild).grid(row=2, column=0, sticky="e", pady=(5, 0))
+        
+        row += 1
+        
+        # === Filters Section ===
+        filters_frame = ttk.LabelFrame(main_frame, text="🔍 Фильтры", padding="10")
+        filters_frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+        filters_frame.columnconfigure(1, weight=1)
+        
+        # Mention only checkbox
+        self.mention_only_var = tk.BooleanVar()
+        ttk.Checkbutton(filters_frame, text="Только упоминания владельца", 
+                       variable=self.mention_only_var, command=self.toggle_mention_filter).grid(row=0, column=0, sticky="w", pady=5)
+        
+        # Voice events checkbox
+        self.voice_events_var = tk.BooleanVar()
+        ttk.Checkbutton(filters_frame, text="Отслеживать голосовые события",
+                       variable=self.voice_events_var, command=self.toggle_voice_events).grid(row=0, column=1, sticky="w", pady=5)
+        
+        # Keywords
+        ttk.Label(filters_frame, text="Ключевые слова:").grid(row=1, column=0, sticky="w", pady=5)
+        self.keywords_var = tk.StringVar()
+        keywords_entry = ttk.Entry(filters_frame, textvariable=self.keywords_var)
+        keywords_entry.grid(row=1, column=1, sticky="ew", padx=(10, 0), pady=5)
+        
+        ttk.Button(filters_frame, text="➕ Добавить слово", command=self.add_keyword).grid(row=1, column=2, sticky="w", padx=(5, 0), pady=5)
+        
+        # Keywords listbox
+        self.keywords_listbox = tk.Listbox(filters_frame, bg=self.listbox_bg, fg=self.fg_color,
+                                           selectbackground=self.accent_color, height=3)
+        self.keywords_listbox.grid(row=2, column=0, columnspan=3, sticky="ew", pady=(5, 0))
+        
+        ttk.Button(filters_frame, text="➖ Удалить слово", command=self.remove_keyword).grid(row=3, column=0, sticky="w", pady=(5, 0))
+        
+        row += 1
+        
+        # === Control Buttons Section ===
+        control_frame = ttk.Frame(main_frame)
+        control_frame.grid(row=row, column=0, columnspan=3, sticky="ew", pady=(0, 10))
+        control_frame.columnconfigure((0, 1, 2, 3), weight=1)
+        
+        self.start_button = ttk.Button(control_frame, text="▶️ Start Bot", command=self.start_bot)
+        self.start_button.grid(row=0, column=0, sticky="ew", padx=(0, 5))
+        
+        self.stop_button = ttk.Button(control_frame, text="⏹️ Stop Bot", command=self.stop_bot, state='disabled')
+        self.stop_button.grid(row=0, column=1, sticky="ew", padx=(0, 5))
+        
+        ttk.Button(control_frame, text="💾 Сохранить конфиг", command=self.save_config).grid(row=0, column=2, sticky="ew", padx=(0, 5))
+        
+        ttk.Button(control_frame, text="📋 Просмотр логов", command=self.show_logs).grid(row=0, column=3, sticky="ew")
+        
+        row += 1
+        
+        # === Status Section ===
+        status_frame = ttk.LabelFrame(main_frame, text="📊 Статус", padding="10")
+        status_frame.grid(row=row, column=0, columnspan=3, sticky="ew")
+        
+        self.status_label = ttk.Label(status_frame, text="❌ Бот остановлен", font=('TkDefaultFont', 10, 'bold'))
+        self.status_label.pack(anchor='w')
+        
+        self.info_label = ttk.Label(status_frame, text="", font=('TkDefaultFont', 8))
+        self.info_label.pack(anchor='w')
+    
+    def load_config_to_ui(self):
+        """Load current configuration into UI fields"""
+        # Load from .env
+        self.discord_token_var.set(os.getenv('DISCORD_TOKEN', ''))
+        self.telegram_token_var.set(os.getenv('TELEGRAM_BOT_TOKEN', ''))
+        
+        # Load from config.json
+        config = config_manager.config
+        self.chat_id_var.set(config.get('telegram_chat_id', ''))
+        self.owner_id_var.set(config.get('discord_owner_id', ''))
+        self.mention_only_var.set(config.get('filter_mentions_only', False))
+        self.voice_events_var.set(config.get('track_voice_events', True))
+        
+        # Load lists
+        self.users_listbox.delete(0, tk.END)
+        for user in config.get('tracked_users', []):
+            self.users_listbox.insert(tk.END, user)
+        
+        self.guilds_listbox.delete(0, tk.END)
+        for guild in config.get('tracked_guilds', []):
+            self.guilds_listbox.insert(tk.END, guild)
+        
+        self.keywords_listbox.delete(0, tk.END)
+        for keyword in config.get('filter_keywords', []):
+            self.keywords_listbox.insert(tk.END, keyword)
+    
+    def save_env(self):
+        """Save environment variables to .env file"""
+        try:
+            discord_token = self.discord_token_var.get().strip()
+            telegram_token = self.telegram_token_var.get().strip()
+            
+            if not discord_token or not telegram_token:
+                messagebox.showwarning("Предупреждение", "Оба токена должны быть заполнены!")
+                return
+            
+            with open('.env', 'w', encoding='utf-8') as f:
+                f.write(f"DISCORD_TOKEN={discord_token}\n")
+                f.write(f"TELEGRAM_BOT_TOKEN={telegram_token}\n")
+            
+            # Reload environment
+            load_dotenv(override=True)
+            
+            messagebox.showinfo("Успех", ".env файл сохранён успешно!")
+            config_manager.logger.info(".env file saved")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить .env: {e}")
+            config_manager.logger.error(f"Error saving .env: {e}")
+    
+    def test_telegram(self):
+        """Test Telegram connection"""
+        def run_test():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(telegram_client.test_connection())
+                if result:
+                    self.root.after(0, lambda: messagebox.showinfo("Успех", "Соединение с Telegram установлено!"))
+                else:
+                    self.root.after(0, lambda: messagebox.showerror("Ошибка", "Не удалось подключиться к Telegram. Проверьте токен и Chat ID."))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showerror("Ошибка", f"Ошибка: {e}"))
+            finally:
+                loop.close()
+        
+        threading.Thread(target=run_test, daemon=True).start()
     
     def add_user(self):
-        """Добавление пользователя через диалог."""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Добавить пользователя")
-        dialog.geometry("300x100")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        ttk.Label(dialog, text="Discord User ID:").pack(pady=5)
-        entry = ttk.Entry(dialog, width=30)
-        entry.pack(pady=5)
-        entry.focus()
-        
-        def on_add():
-            user_id = entry.get().strip()
-            if user_id and user_id.isdigit():
-                if self.config_manager.add_tracked_user(user_id):
-                    self.user_listbox.insert(tk.END, user_id)
-                    dialog.destroy()
-                else:
-                    messagebox.showwarning("Предупреждение", "Пользователь уже в списке")
+        """Add tracked user"""
+        user_id = self.add_user_var.get().strip()
+        if user_id:
+            if config_manager.add_tracked_user(user_id):
+                self.users_listbox.insert(tk.END, user_id)
+                self.add_user_var.set('')
+                config_manager.logger.info(f"Added tracked user: {user_id}")
             else:
-                messagebox.showerror("Ошибка", "Введите корректный Discord ID")
-        
-        ttk.Button(dialog, text="Добавить", command=on_add).pack(pady=5)
-        
-        # Enter для добавления
-        entry.bind('<Return>', lambda e: on_add())
+                messagebox.showwarning("Предупреждение", "Пользователь уже добавлен или ошибка сохранения")
+        else:
+            messagebox.showwarning("Предупреждение", "Введите Discord User ID")
     
     def remove_user(self):
-        """Удаление выбранного пользователя."""
-        selection = self.user_listbox.curselection()
-        if not selection:
+        """Remove tracked user"""
+        selection = self.users_listbox.curselection()
+        if selection:
+            user_id = self.users_listbox.get(selection[0])
+            if config_manager.remove_tracked_user(user_id):
+                self.users_listbox.delete(selection)
+                config_manager.logger.info(f"Removed tracked user: {user_id}")
+            else:
+                messagebox.showerror("Ошибка", "Не удалось удалить пользователя")
+        else:
             messagebox.showwarning("Предупреждение", "Выберите пользователя для удаления")
-            return
-        
-        user_id = self.user_listbox.get(selection[0])
-        if self.config_manager.remove_tracked_user(user_id):
-            self.user_listbox.delete(selection)
-    
-    def clear_users(self):
-        """Очистка списка пользователей."""
-        if messagebox.askyesno("Подтверждение", "Удалить всех пользователей из списка?"):
-            self.config_manager.config["tracked_users"] = []
-            self.user_listbox.delete(0, tk.END)
     
     def add_guild(self):
-        """Добавление сервера через диалог."""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Добавить сервер")
-        dialog.geometry("300x100")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        ttk.Label(dialog, text="Discord Guild ID:").pack(pady=5)
-        entry = ttk.Entry(dialog, width=30)
-        entry.pack(pady=5)
-        entry.focus()
-        
-        def on_add():
-            guild_id = entry.get().strip()
-            if guild_id and guild_id.isdigit():
-                if self.config_manager.add_tracked_guild(guild_id):
-                    self.guild_listbox.insert(tk.END, guild_id)
-                    dialog.destroy()
-                else:
-                    messagebox.showwarning("Предупреждение", "Сервер уже в списке")
+        """Add tracked guild"""
+        guild_id = self.add_guild_var.get().strip()
+        if guild_id:
+            if config_manager.add_tracked_guild(guild_id):
+                self.guilds_listbox.insert(tk.END, guild_id)
+                self.add_guild_var.set('')
+                config_manager.logger.info(f"Added tracked guild: {guild_id}")
             else:
-                messagebox.showerror("Ошибка", "Введите корректный Guild ID")
-        
-        ttk.Button(dialog, text="Добавить", command=on_add).pack(pady=5)
-        entry.bind('<Return>', lambda e: on_add())
+                messagebox.showwarning("Предупреждение", "Сервер уже добавлен или ошибка сохранения")
+        else:
+            messagebox.showwarning("Предупреждение", "Введите Discord Guild ID")
     
     def remove_guild(self):
-        """Удаление выбранного сервера."""
-        selection = self.guild_listbox.curselection()
-        if not selection:
+        """Remove tracked guild"""
+        selection = self.guilds_listbox.curselection()
+        if selection:
+            guild_id = self.guilds_listbox.get(selection[0])
+            if config_manager.remove_tracked_guild(guild_id):
+                self.guilds_listbox.delete(selection)
+                config_manager.logger.info(f"Removed tracked guild: {guild_id}")
+            else:
+                messagebox.showerror("Ошибка", "Не удалось удалить сервер")
+        else:
             messagebox.showwarning("Предупреждение", "Выберите сервер для удаления")
-            return
-        
-        guild_id = self.guild_listbox.get(selection[0])
-        if self.config_manager.remove_tracked_guild(guild_id):
-            self.guild_listbox.delete(selection)
     
-    def clear_guilds(self):
-        """Очистка списка серверов."""
-        if messagebox.askyesno("Подтверждение", "Удалить все сервера из списка?"):
-            self.config_manager.config["tracked_guilds"] = []
-            self.guild_listbox.delete(0, tk.END)
+    def toggle_mention_filter(self):
+        """Toggle mention-only filter"""
+        config_manager.set_filter_mentions_only(self.mention_only_var.get())
+        config_manager.logger.info(f"Mention filter: {self.mention_only_var.get()}")
+    
+    def toggle_voice_events(self):
+        """Toggle voice events tracking"""
+        config_manager.set_track_voice_events(self.voice_events_var.get())
+        config_manager.logger.info(f"Voice events tracking: {self.voice_events_var.get()}")
     
     def add_keyword(self):
-        """Добавление ключевого слова."""
-        dialog = tk.Toplevel(self.root)
-        dialog.title("Добавить ключевое слово")
-        dialog.geometry("300x100")
-        dialog.transient(self.root)
-        dialog.grab_set()
-        
-        ttk.Label(dialog, text="Ключевое слово:").pack(pady=5)
-        entry = ttk.Entry(dialog, width=30)
-        entry.pack(pady=5)
-        entry.focus()
-        
-        def on_add():
-            keyword = entry.get().strip()
-            if keyword:
-                if self.config_manager.add_keyword(keyword):
-                    self.kw_listbox.insert(tk.END, keyword.lower())
-                    dialog.destroy()
-                else:
-                    messagebox.showwarning("Предупреждение", "Слово уже в списке")
+        """Add keyword filter"""
+        keyword = self.keywords_var.get().strip()
+        if keyword:
+            if config_manager.add_keyword(keyword):
+                self.keywords_listbox.insert(tk.END, keyword)
+                self.keywords_var.set('')
+                config_manager.logger.info(f"Added keyword: {keyword}")
             else:
-                messagebox.showerror("Ошибка", "Введите ключевое слово")
-        
-        ttk.Button(dialog, text="Добавить", command=on_add).pack(pady=5)
-        entry.bind('<Return>', lambda e: on_add())
+                messagebox.showwarning("Предупреждение", "Слово уже добавлено")
+        else:
+            messagebox.showwarning("Предупреждение", "Введите ключевое слово")
     
     def remove_keyword(self):
-        """Удаление ключевого слова."""
-        selection = self.kw_listbox.curselection()
-        if not selection:
+        """Remove keyword filter"""
+        selection = self.keywords_listbox.curselection()
+        if selection:
+            keyword = self.keywords_listbox.get(selection[0])
+            if config_manager.remove_keyword(keyword):
+                self.keywords_listbox.delete(selection)
+                config_manager.logger.info(f"Removed keyword: {keyword}")
+            else:
+                messagebox.showerror("Ошибка", "Не удалось удалить слово")
+        else:
             messagebox.showwarning("Предупреждение", "Выберите слово для удаления")
-            return
-        
-        keyword = self.kw_listbox.get(selection[0])
-        if self.config_manager.remove_keyword(keyword):
-            self.kw_listbox.delete(selection)
     
     def save_config(self):
-        """Сохранение конфигурации."""
-        # Обновление конфигурации из UI
-        self.config_manager.set_telegram_chat_id(self.chat_id_var.get().strip())
-        self.config_manager.set_filter_enabled(self.filter_enabled_var.get())
-        
-        # Сохранение
-        if self.config_manager.save_config():
-            self.logger.info("Конфигурация сохранена")
-            messagebox.showinfo("Успех", "Конфигурация успешно сохранена!")
+        """Save current configuration"""
+        try:
+            # Update config from UI
+            config_manager.set_telegram_chat_id(self.chat_id_var.get().strip())
+            config_manager.set_discord_owner_id(self.owner_id_var.get().strip())
             
-            # Обновление Telegram chat_id
-            self.telegram_client.set_chat_id(self.config_manager.get_telegram_chat_id())
-        else:
-            self.logger.error("Ошибка сохранения конфигурации")
-            messagebox.showerror("Ошибка", "Не удалось сохранить конфигурацию")
+            if config_manager.save_config():
+                messagebox.showinfo("Успех", "Конфигурация сохранена!")
+                config_manager.logger.info("Configuration saved")
+            else:
+                messagebox.showerror("Ошибка", "Не удалось сохранить конфигурацию")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Ошибка сохранения: {e}")
+            config_manager.logger.error(f"Error saving config: {e}")
     
     def start_bot(self):
-        """Запуск бота в отдельном потоке."""
-        if self.bot_worker.is_running:
-            messagebox.showwarning("Предупреждение", "Бот уже запущен")
+        """Start the Discord bot"""
+        # Validate required fields
+        discord_token = os.getenv('DISCORD_TOKEN')
+        telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
+        chat_id = config_manager.config.get('telegram_chat_id')
+        
+        if not discord_token:
+            messagebox.showerror("Ошибка", "Discord токен не найден. Заполните и сохраните .env")
             return
         
-        # Проверка токена
-        if not self.config_manager.discord_token:
-            messagebox.showerror("Ошибка", "Discord токен не найден в .env файле")
+        if not telegram_token:
+            messagebox.showerror("Ошибка", "Telegram токен не найден. Заполните и сохраните .env")
             return
         
-        # Сохранение конфигурации перед запуском
+        if not chat_id:
+            messagebox.showerror("Ошибка", "Telegram Chat ID не указан")
+            return
+        
+        # Save config before starting
         self.save_config()
         
-        # Проверка наличия отслеживаемых пользователей
-        if not self.config_manager.get_tracked_users():
-            if not messagebox.askyesno("Предупреждение", 
-                "Список отслеживаемых пользователей пуст.\nЗапустить без пользователей?"):
-                return
+        def run_bot():
+            """Run bot in separate thread"""
+            self.loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self.loop)
+            
+            async def start_async():
+                # Initialize telegram
+                if not telegram_client.initialize():
+                    return False
+                
+                # Start discord bot
+                return await bot_worker.start(discord_token)
+            
+            try:
+                result = self.loop.run_until_complete(start_async())
+                self.root.after(0, lambda: self.on_bot_started(result))
+            except Exception as e:
+                config_manager.logger.error(f"Bot start error: {e}")
+                self.root.after(0, lambda: messagebox.showerror("Ошибка запуска", str(e)))
+                self.root.after(0, lambda: self.on_bot_started(False))
+            finally:
+                # Keep loop running for bot events
+                if self.bot_running:
+                    try:
+                        self.loop.run_forever()
+                    except:
+                        pass
         
-        # Запуск в потоке
-        self.bot_thread = threading.Thread(target=self._run_bot, daemon=True)
+        self.bot_thread = threading.Thread(target=run_bot, daemon=True)
         self.bot_thread.start()
-        
-        self.logger.info("Бот запущен в отдельном потоке")
     
-    def _run_bot(self):
-        """Запуск цикла событий бота в потоке."""
-        self.bot_loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(self.bot_loop)
-        
-        try:
-            self.bot_loop.run_until_complete(self.bot_worker.start())
-        except Exception as e:
-            self.logger.error(f"Ошибка в цикле бота: {e}")
-            self.root.after(0, lambda: self.update_status(f"Error: {e}"))
-        finally:
-            self.bot_loop.close()
+    def on_bot_started(self, success):
+        """Handle bot start completion"""
+        if success:
+            self.bot_running = True
+            self.start_button.config(state='disabled')
+            self.stop_button.config(state='normal')
+            self.status_label.config(text="✅ Бот запущен", foreground="#4caf50")
+            
+            tracked_users = len(config_manager.config.get('tracked_users', []))
+            tracked_guilds = len(config_manager.config.get('tracked_guilds', []))
+            self.info_label.config(text=f"Отслеживается: {tracked_users} пользователей, {tracked_guilds} серверов")
+            
+            config_manager.logger.info("Bot started via GUI")
+        else:
+            self.bot_running = False
+            self.status_label.config(text="❌ Ошибка запуска", foreground="#f44336")
+            messagebox.showerror("Ошибка", "Не удалось запустить бота. Проверьте логи.")
     
     def stop_bot(self):
-        """Остановка бота."""
-        if not self.bot_worker.is_running:
-            return
+        """Stop the Discord bot"""
+        def run_stop():
+            if self.loop and self.loop.is_running():
+                self.loop.call_soon_threadsafe(self.loop.stop)
         
-        self.logger.info("Остановка бота...")
+        if self.bot_thread and self.bot_thread.is_alive():
+            run_stop()
         
-        # Остановка в цикле событий бота
-        if self.bot_loop and self.bot_loop.is_running():
-            self.bot_loop.call_soon_threadsafe(
-                lambda: asyncio.create_task(self.bot_worker.stop())
-            )
+        self.bot_running = False
+        self.start_button.config(state='normal')
+        self.stop_button.config(state='disabled')
+        self.status_label.config(text="❌ Бот остановлен", foreground="#f44336")
+        self.info_label.config(text="")
         
-        self.stop_btn.config(state=tk.DISABLED)
-        self.start_btn.config(state=tk.NORMAL)
-    
-    def update_status(self, status: str):
-        """Обновление статуса бота (вызывается из другого потока)."""
-        def update():
-            self.status_label.config(text=status)
-            if "Connected" in status or "Running" in status:
-                self.stop_btn.config(state=tk.NORMAL)
-                self.start_btn.config(state=tk.DISABLED)
-            elif "Stopped" in status or "Error" in status:
-                self.stop_btn.config(state=tk.DISABLED)
-                self.start_btn.config(state=tk.NORMAL)
-        
-        self.root.after(0, update)
+        config_manager.logger.info("Bot stopped via GUI")
+        messagebox.showinfo("Инфо", "Бот остановлен")
     
     def show_logs(self):
-        """Показ окна просмотра логов."""
-        LogViewer(self.root, self.log_file)
-    
-    def _on_closing(self):
-        """Обработчик закрытия окна."""
-        if self.bot_worker.is_running:
-            if messagebox.askyesno("Подтверждение", 
-                "Бот работает. Остановить и выйти?"):
-                self.stop_bot()
-                self.root.after(1000, self.root.destroy)
-            else:
-                return
+        """Show logs in a new window"""
+        log_window = tk.Toplevel(self.root)
+        log_window.title("📋 Логи приложения")
+        log_window.geometry("700x500")
+        log_window.configure(bg=self.bg_color)
         
-        self.logger.info("Приложение закрыто")
-        self.root.destroy()
-    
-    def run(self):
-        """Запуск главного цикла приложения."""
-        self.root.mainloop()
+        # Text widget for logs
+        log_text = scrolledtext.ScrolledText(log_window, wrap=tk.WORD, bg=self.entry_bg, 
+                                             fg=self.fg_color, insertbackground=self.fg_color)
+        log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Load logs
+        log_content = config_manager.get_log_content(200)
+        log_text.insert(tk.END, log_content)
+        
+        # Scroll to end
+        log_text.see(tk.END)
+        
+        # Refresh button
+        def refresh_logs():
+            log_text.delete(1.0, tk.END)
+            log_text.insert(tk.END, config_manager.get_log_content(200))
+            log_text.see(tk.END)
+        
+        ttk.Button(log_window, text="🔄 Обновить", command=refresh_logs).pack(pady=(0, 10))
+
+
+def main():
+    """Application entry point"""
+    root = tk.Tk()
+    app = DiscordToTelegramApp(root)
+    root.mainloop()
 
 
 if __name__ == "__main__":
-    app = MainWindow()
-    app.run()
+    main()
