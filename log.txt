@@ -1,0 +1,6 @@
+2026-03-31 00:25:31,629 - config_manager - INFO - Конфигурация загружена из config.json
+2026-03-31 00:25:34,583 - config_manager - INFO - Конфигурация загружена из config.json
+2026-03-31 00:25:43,947 - config_manager - INFO - Конфигурация загружена из config.json
+2026-03-31 00:25:47,689 - config_manager - INFO - Конфигурация загружена из config.json
+2026-03-31 00:25:51,351 - config_manager - INFO - Конфигурация загружена из config.json
+2026-03-31 00:26:46,648 - config_manager - INFO - Конфигурация загружена из config.json

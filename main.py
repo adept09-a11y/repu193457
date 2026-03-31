@@ -10,17 +10,18 @@ from dotenv import load_dotenv
 import os
 
 from config_manager import config_manager
-from bot_worker import bot_worker
+from bot_worker import DiscordUserbot
 from telegram_client import telegram_client
 
 # Load environment variables
 load_dotenv()
 
+
 class DiscordToTelegramApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Discord → Telegram Notifications")
-        self.root.geometry("900x700")
+        self.root.geometry("950x750")
         
         # Configure dark theme colors
         self.bg_color = "#2b2b2b"
@@ -37,10 +38,9 @@ class DiscordToTelegramApp:
         # Configure ttk styles for dark theme
         self.setup_dark_theme()
         
-        # Bot running state
+        # Bot instances
+        self.discord_bot = None
         self.bot_running = False
-        self.loop = None
-        self.bot_thread = None
         
         # Create UI components
         self.create_widgets()
@@ -280,9 +280,8 @@ class DiscordToTelegramApp:
                 messagebox.showwarning("Предупреждение", "Оба токена должны быть заполнены!")
                 return
             
-            with open('.env', 'w', encoding='utf-8') as f:
-                f.write(f"DISCORD_TOKEN={discord_token}\n")
-                f.write(f"TELEGRAM_BOT_TOKEN={telegram_token}\n")
+            config_manager.set_discord_token(discord_token)
+            config_manager.set_telegram_token(telegram_token)
             
             # Reload environment
             load_dotenv(override=True)
@@ -295,6 +294,11 @@ class DiscordToTelegramApp:
     
     def test_telegram(self):
         """Test Telegram connection"""
+        chat_id = self.chat_id_var.get().strip()
+        if not chat_id:
+            messagebox.showwarning("Предупреждение", "Сначала укажите Telegram Chat ID!")
+            return
+        
         def run_test():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -364,17 +368,19 @@ class DiscordToTelegramApp:
             messagebox.showwarning("Предупреждение", "Выберите сервер для удаления")
     
     def toggle_mention_filter(self):
-        """Toggle mention-only filter"""
-        config_manager.set_filter_mentions_only(self.mention_only_var.get())
-        config_manager.logger.info(f"Mention filter: {self.mention_only_var.get()}")
+        """Toggle mention filter"""
+        enabled = self.mention_only_var.get()
+        config_manager.set_mention_filter(enabled)
+        config_manager.logger.info(f"Mention filter: {'enabled' if enabled else 'disabled'}")
     
     def toggle_voice_events(self):
         """Toggle voice events tracking"""
-        config_manager.set_track_voice_events(self.voice_events_var.get())
-        config_manager.logger.info(f"Voice events tracking: {self.voice_events_var.get()}")
+        enabled = self.voice_events_var.get()
+        config_manager.set_track_voice_events(enabled)
+        config_manager.logger.info(f"Voice events tracking: {'enabled' if enabled else 'disabled'}")
     
     def add_keyword(self):
-        """Add keyword filter"""
+        """Add keyword"""
         keyword = self.keywords_var.get().strip()
         if keyword:
             if config_manager.add_keyword(keyword):
@@ -382,12 +388,12 @@ class DiscordToTelegramApp:
                 self.keywords_var.set('')
                 config_manager.logger.info(f"Added keyword: {keyword}")
             else:
-                messagebox.showwarning("Предупреждение", "Слово уже добавлено")
+                messagebox.showwarning("Предупреждение", "Ключевое слово уже добавлено")
         else:
             messagebox.showwarning("Предупреждение", "Введите ключевое слово")
     
     def remove_keyword(self):
-        """Remove keyword filter"""
+        """Remove keyword"""
         selection = self.keywords_listbox.curselection()
         if selection:
             keyword = self.keywords_listbox.get(selection[0])
@@ -395,114 +401,102 @@ class DiscordToTelegramApp:
                 self.keywords_listbox.delete(selection)
                 config_manager.logger.info(f"Removed keyword: {keyword}")
             else:
-                messagebox.showerror("Ошибка", "Не удалось удалить слово")
+                messagebox.showerror("Ошибка", "Не удалось удалить ключевое слово")
         else:
-            messagebox.showwarning("Предупреждение", "Выберите слово для удаления")
-    
-    def save_config(self):
-        """Save current configuration"""
-        try:
-            # Update config from UI
-            config_manager.set_telegram_chat_id(self.chat_id_var.get().strip())
-            config_manager.set_discord_owner_id(self.owner_id_var.get().strip())
-            
-            if config_manager.save_config():
-                messagebox.showinfo("Успех", "Конфигурация сохранена!")
-                config_manager.logger.info("Configuration saved")
-            else:
-                messagebox.showerror("Ошибка", "Не удалось сохранить конфигурацию")
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Ошибка сохранения: {e}")
-            config_manager.logger.error(f"Error saving config: {e}")
+            messagebox.showwarning("Предупреждение", "Выберите ключевое слово для удаления")
     
     def start_bot(self):
         """Start the Discord bot"""
-        # Validate required fields
-        discord_token = os.getenv('DISCORD_TOKEN')
-        telegram_token = os.getenv('TELEGRAM_BOT_TOKEN')
-        chat_id = config_manager.config.get('telegram_chat_id')
-        
-        if not discord_token:
-            messagebox.showerror("Ошибка", "Discord токен не найден. Заполните и сохраните .env")
+        if self.bot_running:
+            messagebox.showwarning("Предупреждение", "Бот уже запущен!")
             return
         
-        if not telegram_token:
-            messagebox.showerror("Ошибка", "Telegram токен не найден. Заполните и сохраните .env")
+        # Validate required settings
+        if not self.discord_token_var.get().strip():
+            messagebox.showerror("Ошибка", "Укажите Discord Token в настройках .env!")
             return
         
-        if not chat_id:
-            messagebox.showerror("Ошибка", "Telegram Chat ID не указан")
+        if not self.telegram_token_var.get().strip():
+            messagebox.showerror("Ошибка", "Укажите Telegram Bot Token в настройках .env!")
             return
         
-        # Save config before starting
-        self.save_config()
+        if not self.chat_id_var.get().strip():
+            messagebox.showerror("Ошибка", "Укажите Telegram Chat ID!")
+            return
         
+        # Save current settings
+        config_manager.set_telegram_chat_id(self.chat_id_var.get().strip())
+        config_manager.set_discord_owner_id(self.owner_id_var.get().strip())
+        
+        # Create bot instance
+        self.discord_bot = DiscordUserbot(config_manager, telegram_client)
+        
+        # Start bot in separate thread
         def run_bot():
-            """Run bot in separate thread"""
-            self.loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self.loop)
-            
-            async def start_async():
-                # Initialize telegram
-                if not telegram_client.initialize():
-                    return False
-                
-                # Start discord bot
-                return await bot_worker.start(discord_token)
-            
             try:
-                result = self.loop.run_until_complete(start_async())
-                self.root.after(0, lambda: self.on_bot_started(result))
+                self.discord_bot.start()
             except Exception as e:
-                config_manager.logger.error(f"Bot start error: {e}")
-                self.root.after(0, lambda: messagebox.showerror("Ошибка запуска", str(e)))
-                self.root.after(0, lambda: self.on_bot_started(False))
-            finally:
-                # Keep loop running for bot events
-                if self.bot_running:
-                    try:
-                        self.loop.run_forever()
-                    except:
-                        pass
+                config_manager.logger.error(f"Bot error: {e}")
+                self.root.after(0, lambda: messagebox.showerror("Ошибка бота", str(e)))
+                self.root.after(0, self._on_bot_stop)
         
-        self.bot_thread = threading.Thread(target=run_bot, daemon=True)
-        self.bot_thread.start()
-    
-    def on_bot_started(self, success):
-        """Handle bot start completion"""
-        if success:
-            self.bot_running = True
-            self.start_button.config(state='disabled')
-            self.stop_button.config(state='normal')
-            self.status_label.config(text="✅ Бот запущен", foreground="#4caf50")
-            
-            tracked_users = len(config_manager.config.get('tracked_users', []))
-            tracked_guilds = len(config_manager.config.get('tracked_guilds', []))
-            self.info_label.config(text=f"Отслеживается: {tracked_users} пользователей, {tracked_guilds} серверов")
-            
-            config_manager.logger.info("Bot started via GUI")
-        else:
-            self.bot_running = False
-            self.status_label.config(text="❌ Ошибка запуска", foreground="#f44336")
-            messagebox.showerror("Ошибка", "Не удалось запустить бота. Проверьте логи.")
+        thread = threading.Thread(target=run_bot, daemon=True)
+        thread.start()
+        
+        # Update UI
+        self.bot_running = True
+        self.start_button.config(state='disabled')
+        self.stop_button.config(state='normal')
+        self.status_label.config(text="✅ Бот запущен", foreground="#4caf50")
+        self.info_label.config(text=f"Мониторинг {len(self.users_listbox.get(0, tk.END))} пользователей на {len(self.guilds_listbox.get(0, tk.END))} серверах")
+        config_manager.logger.info("Bot started via GUI")
     
     def stop_bot(self):
         """Stop the Discord bot"""
-        def run_stop():
-            if self.loop and self.loop.is_running():
-                self.loop.call_soon_threadsafe(self.loop.stop)
+        if not self.bot_running:
+            messagebox.showwarning("Предупреждение", "Бот не запущен!")
+            return
         
-        if self.bot_thread and self.bot_thread.is_alive():
-            run_stop()
+        if self.discord_bot:
+            self.discord_bot.stop()
         
+        self._on_bot_stop()
+    
+    def _on_bot_stop(self):
+        """Handle bot stop event"""
         self.bot_running = False
         self.start_button.config(state='normal')
         self.stop_button.config(state='disabled')
         self.status_label.config(text="❌ Бот остановлен", foreground="#f44336")
         self.info_label.config(text="")
-        
         config_manager.logger.info("Bot stopped via GUI")
-        messagebox.showinfo("Инфо", "Бот остановлен")
+    
+    def save_config(self):
+        """Save current configuration"""
+        try:
+            # Save tokens to .env
+            if self.discord_token_var.get().strip():
+                config_manager.set_discord_token(self.discord_token_var.get().strip())
+            if self.telegram_token_var.get().strip():
+                config_manager.set_telegram_token(self.telegram_token_var.get().strip())
+            
+            # Save other settings
+            config_manager.set_telegram_chat_id(self.chat_id_var.get().strip())
+            config_manager.set_discord_owner_id(self.owner_id_var.get().strip())
+            config_manager.set_mention_filter(self.mention_only_var.get())
+            config_manager.set_track_voice_events(self.voice_events_var.get())
+            
+            # Clear and reload lists
+            config_manager.config['tracked_users'] = list(self.users_listbox.get(0, tk.END))
+            config_manager.config['tracked_guilds'] = list(self.guilds_listbox.get(0, tk.END))
+            config_manager.config['filter_keywords'] = list(self.keywords_listbox.get(0, tk.END))
+            config_manager.save_config()
+            
+            messagebox.showinfo("Успех", "Конфигурация сохранена!")
+            config_manager.logger.info("Configuration saved")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить конфигурацию: {e}")
+            config_manager.logger.error(f"Error saving config: {e}")
     
     def show_logs(self):
         """Show logs in a new window"""
@@ -512,22 +506,31 @@ class DiscordToTelegramApp:
         log_window.configure(bg=self.bg_color)
         
         # Text widget for logs
-        log_text = scrolledtext.ScrolledText(log_window, wrap=tk.WORD, bg=self.entry_bg, 
-                                             fg=self.fg_color, insertbackground=self.fg_color)
+        log_text = scrolledtext.ScrolledText(log_window, bg=self.listbox_bg, fg=self.fg_color, 
+                                             insertbackground=self.fg_color, wrap=tk.WORD)
         log_text.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Load logs
-        log_content = config_manager.get_log_content(200)
-        log_text.insert(tk.END, log_content)
-        
-        # Scroll to end
-        log_text.see(tk.END)
+        # Load logs from file
+        try:
+            with open('log.txt', 'r', encoding='utf-8') as f:
+                logs = f.read()
+            log_text.insert(tk.END, logs)
+            log_text.see(tk.END)
+        except FileNotFoundError:
+            log_text.insert(tk.END, "Лог-файл ещё не создан.\n")
+        except Exception as e:
+            log_text.insert(tk.END, f"Ошибка чтения логов: {e}\n")
         
         # Refresh button
         def refresh_logs():
             log_text.delete(1.0, tk.END)
-            log_text.insert(tk.END, config_manager.get_log_content(200))
-            log_text.see(tk.END)
+            try:
+                with open('log.txt', 'r', encoding='utf-8') as f:
+                    logs = f.read()
+                log_text.insert(tk.END, logs)
+                log_text.see(tk.END)
+            except Exception as e:
+                log_text.insert(tk.END, f"Ошибка чтения логов: {e}\n")
         
         ttk.Button(log_window, text="🔄 Обновить", command=refresh_logs).pack(pady=(0, 10))
 

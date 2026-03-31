@@ -1,9 +1,9 @@
 {
-  "tracked_users": [],
-  "tracked_guilds": [],
   "telegram_chat_id": "",
   "discord_owner_id": "",
+  "tracked_users": [],
+  "tracked_guilds": [],
   "filter_mentions_only": false,
-  "filter_keywords": [],
-  "track_voice_events": true
+  "track_voice_events": true,
+  "filter_keywords": []
 }

@@ -1,232 +1,303 @@
 """
-Bot Worker - Discord userbot logic for monitoring messages and voice events
-Uses discord.py-self for userbot functionality
+Модуль для работы с Discord Userbot.
+Отслеживает сообщения и голосовые события, пересылает уведомления в Telegram.
 """
+
 import asyncio
+import logging
 from datetime import datetime
-import discord
-from config_manager import config_manager
-from telegram_client import telegram_client
+from typing import Optional, List, Set
+
+try:
+    import discord
+    from discord.ext import commands
+except ImportError:
+    raise ImportError("Необходимо установить discord.py-self: pip install 'discord.py-self>=1.9.2'")
+
+from config_manager import ConfigManager
+from telegram_client import TelegramClient
+
+logger = logging.getLogger(__name__)
+
 
 class DiscordUserbot:
-    def __init__(self):
-        self.client = None
-        self.running = False
-        self.task = None
+    """Класс для управления Discord Userbot."""
+
+    def __init__(self, config_manager: ConfigManager, telegram_client: TelegramClient):
+        self.config_manager = config_manager
+        self.telegram_client = telegram_client
+        self.is_running = False
+        self.client: Optional[commands.Bot] = None
+        self.task: Optional[asyncio.Task] = None
+
+        # Настройка интентов для userbot
+        intents = discord.Intents.all()
+        intents.message_content = True
+        intents.members = True
+        intents.presences = True
         
-        # GuildSubscriptionOptions for discord.py-self (instead of Intents)
-        # This controls what events and data the client subscribes to
-        self.options = discord.GuildSubscriptionOptions.default()
-    
-    async def start(self, token):
-        """Start the Discord userbot"""
+        self.intents = intents
+
+    async def _run_bot(self):
+        """Асинхронный запуск бота."""
+        token = self.config_manager.get_discord_token()
+        if not token:
+            logger.error("Токен Discord не найден!")
+            return
+
         try:
-            if not token:
-                config_manager.logger.error("Discord token not provided")
-                return False
-            
-            # Create client with GuildSubscriptionOptions (discord.py-self API)
-            self.client = discord.Client(options=self.options)
-            
+            # Создаем клиента с нужными интентами
+            self.client = commands.Bot(
+                command_prefix='!',
+                intents=self.intents,
+                case_insensitive=True
+            )
+
+            # Регистрируем события
             @self.client.event
             async def on_ready():
-                config_manager.logger.info(f"Discord userbot logged in as {self.client.user}")
-                self.running = True
-            
+                logger.info(f"Userbot запущен как {self.client.user} (ID: {self.client.user.id})")
+                self.is_running = True
+
             @self.client.event
             async def on_message(message):
-                await self.handle_message(message)
-            
+                await self._handle_message(message)
+
+            @self.client.event
+            async def on_message_edit(before, after):
+                await self._handle_message_edit(before, after)
+
             @self.client.event
             async def on_voice_state_update(member, before, after):
-                await self.handle_voice_update(member, before, after)
-            
-            # Start the client in a separate task
-            self.task = asyncio.create_task(self.client.start(token))
-            
-            # Wait a bit to ensure connection
-            await asyncio.sleep(3)
-            
-            if self.running:
-                config_manager.logger.info("Discord userbot started successfully")
-                return True
-            return False
-            
+                await self._handle_voice_state_update(member, before, after)
+
+            # Запускаем клиента
+            await self.client.start(token, bot=False)
+
         except Exception as e:
-            config_manager.logger.error(f"Failed to start Discord userbot: {e}")
-            return False
-    
-    async def stop(self):
-        """Stop the Discord userbot"""
-        try:
-            self.running = False
-            if self.client and self.client.is_ready():
-                await self.client.close()
-            if self.task:
-                self.task.cancel()
-                try:
-                    await self.task
-                except asyncio.CancelledError:
-                    pass
-            config_manager.logger.info("Discord userbot stopped")
-            return True
-        except Exception as e:
-            config_manager.logger.error(f"Error stopping Discord userbot: {e}")
-            return False
-    
-    async def handle_message(self, message):
-        """Handle incoming message events"""
-        try:
-            # Ignore our own messages
-            if message.author.id == self.client.user.id:
-                return
-            
-            # Ignore bots (optional, can be configured)
-            if message.author.bot:
-                return
-            
-            # Check if user is tracked
-            author_id = str(message.author.id)
-            tracked_users = config_manager.config.get('tracked_users', [])
-            
-            if author_id not in tracked_users:
-                return
-            
-            # Check if guild is tracked (if guild exists)
-            guild_id = str(message.guild.id) if message.guild else None
-            tracked_guilds = config_manager.config.get('tracked_guilds', [])
-            
-            if message.guild and guild_id not in tracked_guilds:
-                return
-            
-            # Apply filters
-            if not self.should_forward_message(message):
-                return
-            
-            # Prepare notification data
-            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            guild_name = message.guild.name if message.guild else "Личные сообщения"
-            channel_name = f"#{message.channel.name}" if hasattr(message.channel, 'name') else "Unknown"
-            author_name = f"{message.author.name}#{message.author.discriminator}"
-            content = message.content
-            message_url = f"https://discord.com/channels/{guild_id}/{message.channel.id}/{message.id}" if message.guild else None
-            
-            # Get attachments
-            attachments = [att.url for att in message.attachments] if message.attachments else []
-            
-            # Send to Telegram
-            await telegram_client.send_message_notification(
-                timestamp=timestamp,
-                guild_name=guild_name,
-                channel_name=channel_name,
-                author_name=author_name,
-                author_id=author_id,
-                content=content,
-                message_url=message_url,
-                attachments=attachments
+            logger.error(f"Ошибка при запуске бота: {e}")
+            self.is_running = False
+            raise
+
+    async def _handle_message(self, message):
+        """Обработка нового сообщения."""
+        if message.author == self.client.user:
+            return  # Игнорируем свои сообщения
+
+        # Проверяем фильтры
+        if not self._should_forward_message(message):
+            return
+
+        # Формируем уведомление
+        notification = self._format_message_notification(message)
+        
+        # Отправляем в Telegram
+        await self._send_to_telegram(notification)
+
+    async def _handle_message_edit(self, before, after):
+        """Обработка редактирования сообщения."""
+        if after.author == self.client.user:
+            return
+
+        if not self._should_forward_message(after):
+            return
+
+        # Проверяем, изменилось ли содержимое
+        if before.content == after.content:
+            return
+
+        notification = self._format_message_edit_notification(before, after)
+        await self._send_to_telegram(notification)
+
+    async def _handle_voice_state_update(self, member, before, after):
+        """Обработка изменений голосового состояния."""
+        if member == self.client.user:
+            return  # Игнорируем свои события
+
+        # Проверяем, отслеживается ли пользователь
+        tracked_users = self.config_manager.get_tracked_users()
+        if str(member.id) not in tracked_users:
+            return
+
+        # Проверяем, отслеживается ли сервер (если есть список серверов)
+        tracked_guilds = self.config_manager.get_tracked_guilds()
+        if tracked_guilds and str(member.guild.id) not in tracked_guilds:
+            return
+
+        # Определяем тип события
+        notification = None
+        
+        if after.channel and not before.channel:
+            # Пользователь подключился к голосовому каналу
+            notification = (
+                f"🎤 <b>Подключился к голосовому каналу</b>\n\n"
+                f"<b>Пользователь:</b> {member.display_name} ({member.id})\n"
+                f"<b>Канал:</b> {after.channel.name}\n"
+                f"<b>Сервер:</b> {member.guild.name}\n"
+                f"<b>Время:</b> {datetime.now().strftime('%H:%M:%S')}"
             )
-            
-        except Exception as e:
-            config_manager.logger.error(f"Error handling message: {e}")
-    
-    async def handle_voice_update(self, member, before, after):
-        """Handle voice state update events"""
-        try:
-            # Check if voice tracking is enabled
-            if not config_manager.config.get('track_voice_events', True):
-                return
-            
-            # Ignore our own updates
-            if member.id == self.client.user.id:
-                return
-            
-            # Check if member is tracked
-            member_id = str(member.id)
-            tracked_users = config_manager.config.get('tracked_users', [])
-            
-            if member_id not in tracked_users:
-                return
-            
-            # Check if guild is tracked
-            guild_id = str(member.guild.id) if member.guild else None
-            tracked_guilds = config_manager.config.get('tracked_guilds', [])
-            
-            if member.guild and guild_id not in tracked_guilds:
-                return
-            
-            # Determine event type
-            event_type = None
-            channel_name = "Unknown"
-            guild_name = member.guild.name if member.guild else "Unknown"
-            
-            if before.channel is None and after.channel is not None:
-                # User joined a voice channel
-                event_type = "join"
-                channel_name = after.channel.name
-            elif before.channel is not None and after.channel is None:
-                # User left a voice channel
-                event_type = "leave"
-                channel_name = before.channel.name
-            elif before.channel != after.channel and before.channel and after.channel:
-                # User switched channels - send leave then join
-                # First: leave old channel
-                await telegram_client.send_voice_notification(
-                    user_name=f"{member.name}#{member.discriminator}",
-                    channel_name=before.channel.name,
-                    guild_name=guild_name,
-                    event_type="leave"
-                )
-                # Then: join new channel
-                await telegram_client.send_voice_notification(
-                    user_name=f"{member.name}#{member.discriminator}",
-                    channel_name=after.channel.name,
-                    guild_name=guild_name,
-                    event_type="join"
-                )
-                return
-            
-            if event_type:
-                await telegram_client.send_voice_notification(
-                    user_name=f"{member.name}#{member.discriminator}",
-                    channel_name=channel_name,
-                    guild_name=guild_name,
-                    event_type=event_type
-                )
-            
-        except Exception as e:
-            config_manager.logger.error(f"Error handling voice update: {e}")
-    
-    def should_forward_message(self, message):
-        """Check if message should be forwarded based on filters"""
-        config = config_manager.config
-        
-        # If mention-only filter is enabled
-        if config.get('filter_mentions_only', False):
-            owner_id = config.get('discord_owner_id')
-            if owner_id and message.mentions:
-                # Check if owner is mentioned
-                for mention in message.mentions:
-                    if str(mention.id) == owner_id:
-                        return True
-            # Also check for role mentions or everyone mention
-            if message.mention_everyone:
-                return True
-            return False
-        
-        # If keywords filter is set
-        keywords = config.get('filter_keywords', [])
-        if keywords and message.content:
-            content_lower = message.content.lower()
-            for keyword in keywords:
-                if keyword.lower() in content_lower:
-                    return True
-            # If keywords are set but not found, don't forward
-            if keywords:
+        elif before.channel and not after.channel:
+            # Пользователь покинул голосовой канал
+            notification = (
+                f"🔇 <b>Покинул голосовой канал</b>\n\n"
+                f"<b>Пользователь:</b> {member.display_name} ({member.id})\n"
+                f"<b>Канал:</b> {before.channel.name}\n"
+                f"<b>Сервер:</b> {member.guild.name}\n"
+                f"<b>Время:</b> {datetime.now().strftime('%H:%M:%S')}"
+            )
+        elif before.channel and after.channel and before.channel != after.channel:
+            # Пользователь перешел между каналами
+            notification = (
+                f"🔄 <b>Перешел в другой голосовой канал</b>\n\n"
+                f"<b>Пользователь:</b> {member.display_name} ({member.id})\n"
+                f"<b>С канала:</b> {before.channel.name}\n"
+                f"<b>На канал:</b> {after.channel.name}\n"
+                f"<b>Сервер:</b> {member.guild.name}\n"
+                f"<b>Время:</b> {datetime.now().strftime('%H:%M:%S')}"
+            )
+
+        if notification:
+            await self._send_to_telegram(notification)
+
+    def _should_forward_message(self, message) -> bool:
+        """Проверяет, нужно ли пересылать сообщение."""
+        # Проверяем сервер
+        tracked_guilds = self.config_manager.get_tracked_guilds()
+        if tracked_guilds:
+            if str(message.guild.id) not in tracked_guilds:
                 return False
-        
-        # No filters or filters passed
+
+        # Проверяем пользователя
+        tracked_users = self.config_manager.get_tracked_users()
+        if str(message.author.id) not in tracked_users:
+            return False
+
+        # Проверяем фильтр по упоминаниям
+        if self.config_manager.get_mention_filter():
+            owner_id = self.config_manager.get_telegram_owner_id()
+            if owner_id and f"<@{owner_id}>" not in message.content:
+                return False
+
+        # Проверяем фильтр по ключевым словам
+        keywords = self.config_manager.get_keywords()
+        if keywords:
+            content_lower = message.content.lower()
+            if not any(keyword.lower() in content_lower for keyword in keywords):
+                return False
+
         return True
 
+    def _format_message_notification(self, message) -> str:
+        """Форматирует уведомление о новом сообщении."""
+        time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        guild_name = message.guild.name if message.guild else "ЛС"
+        channel_name = message.channel.name if hasattr(message.channel, 'name') else str(message.channel.id)
+        
+        author_discriminator = f"#{message.author.discriminator}" if message.author.discriminator != "0" else ""
+        author_name = f"{message.author.name}{author_discriminator}"
+        
+        # Ссылка на сообщение
+        message_link = f"https://discord.com/channels/{message.guild.id}/{message.channel.id}/{message.id}" if message.guild else None
+        
+        notification = (
+            f"💬 <b>Новое сообщение</b>\n\n"
+            f"<b>Время:</b> {time_str}\n"
+            f"<b>Сервер:</b> {guild_name}\n"
+            f"<b>Канал:</b> {channel_name}\n"
+            f"<b>Автор:</b> {author_name} ({message.author.id})\n"
+        )
+        
+        if message.content:
+            notification += f"\n<b>Текст:</b>\n{message.content[:1000]}"  # Ограничиваем длину
+            
+        if message.attachments:
+            attachment_links = "\n".join([att.url for att in message.attachments[:5]])
+            notification += f"\n\n<b>Вложения:</b>\n{attachment_links}"
+            
+        if message_link:
+            notification += f"\n\n🔗 <a href='{message_link}'>Перейти к сообщению</a>"
+            
+        return notification
 
-# Global bot worker instance
-bot_worker = DiscordUserbot()
+    def _format_message_edit_notification(self, before, after) -> str:
+        """Форматирует уведомление об редактировании сообщения."""
+        time_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        
+        guild_name = after.guild.name if after.guild else "ЛС"
+        channel_name = after.channel.name if hasattr(after.channel, 'name') else str(after.channel.id)
+        
+        author_discriminator = f"#{after.author.discriminator}" if after.author.discriminator != "0" else ""
+        author_name = f"{after.author.name}{author_discriminator}"
+        
+        message_link = f"https://discord.com/channels/{after.guild.id}/{after.channel.id}/{after.id}" if after.guild else None
+        
+        notification = (
+            f"✏️ <b>Сообщение отредактировано</b>\n\n"
+            f"<b>Время:</b> {time_str}\n"
+            f"<b>Сервер:</b> {guild_name}\n"
+            f"<b>Канал:</b> {channel_name}\n"
+            f"<b>Автор:</b> {author_name} ({after.author.id})\n"
+        )
+        
+        if before.content:
+            notification += f"\n<b>Было:</b>\n{before.content[:500]}"
+        if after.content:
+            notification += f"\n\n<b>Стало:</b>\n{after.content[:500]}"
+            
+        if message_link:
+            notification += f"\n\n🔗 <a href='{message_link}'>Перейти к сообщению</a>"
+            
+        return notification
+
+    async def _send_to_telegram(self, text: str):
+        """Отправляет уведомление в Telegram."""
+        try:
+            await self.telegram_client.send_message(text)
+            logger.debug("Уведомление отправлено в Telegram")
+        except Exception as e:
+            logger.error(f"Ошибка отправки в Telegram: {e}")
+
+    def start(self):
+        """Запускает бота в отдельном потоке."""
+        if self.is_running:
+            logger.warning("Бот уже запущен!")
+            return
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        
+        self.task = loop.create_task(self._run_bot())
+        
+        def run_loop():
+            try:
+                loop.run_forever()
+            except Exception as e:
+                logger.error(f"Ошибка в цикле событий: {e}")
+            finally:
+                loop.close()
+
+        import threading
+        thread = threading.Thread(target=run_loop, daemon=True)
+        thread.start()
+        logger.info("Бот запущен в фоновом режиме")
+
+    def stop(self):
+        """Останавливает бота."""
+        if not self.is_running or not self.client:
+            logger.warning("Бот не запущен!")
+            return
+
+        try:
+            if self.client.is_running():
+                loop = asyncio.get_event_loop()
+                loop.create_task(self.client.close())
+                self.is_running = False
+                logger.info("Бот остановлен")
+        except Exception as e:
+            logger.error(f"Ошибка при остановке бота: {e}")
+            self.is_running = False
+
+    def get_status(self) -> bool:
+        """Возвращает статус бота."""
+        return self.is_running and self.client is not None and self.client.is_running()

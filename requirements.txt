@@ -1,15 +1,4 @@
-# Dependencies for Discord to Telegram Notification App
-
-# Discord library (self-bot support)
-# Note: discord.py self-bots are against ToS, use at your own risk
-# We use a fork or specific version that supports user tokens
-discord.py-self==1.9.2
-
-# Telegram Bot API
-python-telegram-bot==20.7
-
-# Environment variables loading
-python-dotenv==1.0.0
-
-# Asyncio support improvements (version compatible with discord.py-self)
-aiohttp>=3.6.0,<3.8.0
+discord.py-self>=1.9.2
+python-telegram-bot>=20.0
+python-dotenv>=1.0.0
+aiohttp>=3.9.0

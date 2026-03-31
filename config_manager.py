@@ -1,162 +1,215 @@
 """
-Config Manager - Handles configuration loading, saving, and logging
+Менеджер конфигурации приложения.
+Управляет настройками в config.json и .env файлах.
 """
+
 import json
 import os
 import logging
-from datetime import datetime
 from pathlib import Path
+from typing import List, Optional
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Настройка логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('log.txt', encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
 
-CONFIG_FILE = "config.json"
-LOG_FILE = "log.txt"
+logger = logging.getLogger(__name__)
+
 
 class ConfigManager:
-    def __init__(self):
-        self.config = self.load_config()
-        self.setup_logging()
-    
+    """Класс для управления конфигурацией приложения."""
+
+    def __init__(self, config_path: str = 'config.json'):
+        self.config_path = config_path
+        self.config = {}
+        self.load_config()
+
     def load_config(self):
-        """Load configuration from JSON file"""
-        default_config = {
-            "tracked_users": [],
-            "tracked_guilds": [],
-            "telegram_chat_id": "",
-            "discord_owner_id": "",
-            "filter_mentions_only": False,
-            "filter_keywords": [],
-            "track_voice_events": True
-        }
-        
-        if os.path.exists(CONFIG_FILE):
+        """Загружает конфигурацию из файла."""
+        if os.path.exists(self.config_path):
             try:
-                with open(CONFIG_FILE, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                    # Merge with defaults to ensure all keys exist
-                    for key, value in default_config.items():
-                        if key not in config:
-                            config[key] = value
-                    return config
-            except (json.JSONDecodeError, IOError) as e:
-                print(f"Error loading config: {e}. Using defaults.")
-                return default_config
-        return default_config
-    
+                with open(self.config_path, 'r', encoding='utf-8') as f:
+                    self.config = json.load(f)
+                logger.info(f"Конфигурация загружена из {self.config_path}")
+            except Exception as e:
+                logger.error(f"Ошибка загрузки конфигурации: {e}")
+                self.config = {}
+        else:
+            self.config = {}
+            logger.info("Создана новая конфигурация")
+
     def save_config(self):
-        """Save configuration to JSON file"""
+        """Сохраняет конфигурацию в файл."""
         try:
-            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            with open(self.config_path, 'w', encoding='utf-8') as f:
                 json.dump(self.config, f, indent=2, ensure_ascii=False)
+            logger.info(f"Конфигурация сохранена в {self.config_path}")
             return True
-        except IOError as e:
-            print(f"Error saving config: {e}")
+        except Exception as e:
+            logger.error(f"Ошибка сохранения конфигурации: {e}")
             return False
-    
-    def setup_logging(self):
-        """Setup logging to file and console"""
-        self.logger = logging.getLogger('DiscordToTelegram')
-        self.logger.setLevel(logging.INFO)
+
+    # === Discord Token ===
+    def get_discord_token(self) -> Optional[str]:
+        """Получает токен Discord из .env"""
+        load_dotenv()
+        return os.getenv('DISCORD_TOKEN')
+
+    def set_discord_token(self, token: str):
+        """Устанавливает токен Discord в .env"""
+        self._update_env_file('DISCORD_TOKEN', token)
+
+    # === Telegram Token ===
+    def get_telegram_token(self) -> Optional[str]:
+        """Получает токен Telegram бота из .env"""
+        load_dotenv()
+        return os.getenv('TELEGRAM_BOT_TOKEN')
+
+    def set_telegram_token(self, token: str):
+        """Устанавливает токен Telegram бота в .env"""
+        self._update_env_file('TELEGRAM_BOT_TOKEN', token)
+
+    def _update_env_file(self, key: str, value: str):
+        """Обновляет переменную в .env файле."""
+        env_path = Path('.env')
+        lines = []
         
-        # Clear existing handlers
-        self.logger.handlers.clear()
+        if env_path.exists():
+            with open(env_path, 'r', encoding='utf-8') as f:
+                lines = f.readlines()
         
-        # File handler
-        file_handler = logging.FileHandler(LOG_FILE, encoding='utf-8')
-        file_handler.setLevel(logging.INFO)
+        # Ищем существующую запись или добавляем новую
+        found = False
+        for i, line in enumerate(lines):
+            if line.startswith(f"{key}="):
+                lines[i] = f"{key}={value}\n"
+                found = True
+                break
         
-        # Console handler
-        console_handler = logging.StreamHandler()
-        console_handler.setLevel(logging.INFO)
+        if not found:
+            lines.append(f"{key}={value}\n")
         
-        # Formatter
-        formatter = logging.Formatter(
-            '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-            datefmt='%Y-%m-%d %H:%M:%S'
-        )
-        file_handler.setFormatter(formatter)
-        console_handler.setFormatter(formatter)
+        with open(env_path, 'w', encoding='utf-8') as f:
+            f.writelines(lines)
         
-        self.logger.addHandler(file_handler)
-        self.logger.addHandler(console_handler)
-    
-    def get_env_value(self, key, default=None):
-        """Get value from environment variables"""
-        return os.getenv(key, default)
-    
-    def add_tracked_user(self, user_id):
-        """Add a tracked Discord user ID"""
-        if user_id and user_id not in self.config["tracked_users"]:
-            self.config["tracked_users"].append(str(user_id))
+        # Перезагружаем переменные окружения
+        load_dotenv(override=True)
+        logger.info(f"Обновлена переменная {key} в .env")
+
+    # === Telegram Chat ID ===
+    def get_telegram_chat_id(self) -> str:
+        """Получает Chat ID для отправки уведомлений."""
+        return self.config.get('telegram_chat_id', '')
+
+    def set_telegram_chat_id(self, chat_id: str):
+        """Устанавливает Chat ID."""
+        self.config['telegram_chat_id'] = chat_id
+        self.save_config()
+
+    # === Discord Owner ID ===
+    def get_discord_owner_id(self) -> str:
+        """Получает ID владельца Discord."""
+        return self.config.get('discord_owner_id', '')
+
+    def set_discord_owner_id(self, owner_id: str):
+        """Устанавливает ID владельца Discord."""
+        self.config['discord_owner_id'] = owner_id
+        self.save_config()
+
+    # === Tracked Users ===
+    def get_tracked_users(self) -> List[str]:
+        """Получает список отслеживаемых пользователей."""
+        return self.config.get('tracked_users', [])
+
+    def add_tracked_user(self, user_id: str) -> bool:
+        """Добавляет пользователя в список отслеживаемых."""
+        users = self.get_tracked_users()
+        if user_id not in users:
+            users.append(user_id)
+            self.config['tracked_users'] = users
             return self.save_config()
         return False
-    
-    def remove_tracked_user(self, user_id):
-        """Remove a tracked Discord user ID"""
-        if str(user_id) in self.config["tracked_users"]:
-            self.config["tracked_users"].remove(str(user_id))
+
+    def remove_tracked_user(self, user_id: str) -> bool:
+        """Удаляет пользователя из списка отслеживаемых."""
+        users = self.get_tracked_users()
+        if user_id in users:
+            users.remove(user_id)
+            self.config['tracked_users'] = users
             return self.save_config()
         return False
-    
-    def add_tracked_guild(self, guild_id):
-        """Add a tracked Discord guild ID"""
-        if guild_id and guild_id not in self.config["tracked_guilds"]:
-            self.config["tracked_guilds"].append(str(guild_id))
+
+    # === Tracked Guilds ===
+    def get_tracked_guilds(self) -> List[str]:
+        """Получает список отслеживаемых серверов."""
+        return self.config.get('tracked_guilds', [])
+
+    def add_tracked_guild(self, guild_id: str) -> bool:
+        """Добавляет сервер в список отслеживаемых."""
+        guilds = self.get_tracked_guilds()
+        if guild_id not in guilds:
+            guilds.append(guild_id)
+            self.config['tracked_guilds'] = guilds
             return self.save_config()
         return False
-    
-    def remove_tracked_guild(self, guild_id):
-        """Remove a tracked Discord guild ID"""
-        if str(guild_id) in self.config["tracked_guilds"]:
-            self.config["tracked_guilds"].remove(str(guild_id))
+
+    def remove_tracked_guild(self, guild_id: str) -> bool:
+        """Удаляет сервер из списка отслеживаемых."""
+        guilds = self.get_tracked_guilds()
+        if guild_id in guilds:
+            guilds.remove(guild_id)
+            self.config['tracked_guilds'] = guilds
             return self.save_config()
         return False
-    
-    def set_telegram_chat_id(self, chat_id):
-        """Set Telegram chat ID for notifications"""
-        self.config["telegram_chat_id"] = str(chat_id)
-        return self.save_config()
-    
-    def set_discord_owner_id(self, owner_id):
-        """Set Discord owner ID for mention filtering"""
-        self.config["discord_owner_id"] = str(owner_id)
-        return self.save_config()
-    
-    def set_filter_mentions_only(self, enabled):
-        """Enable/disable mention-only filter"""
-        self.config["filter_mentions_only"] = enabled
-        return self.save_config()
-    
-    def set_track_voice_events(self, enabled):
-        """Enable/disable voice event tracking"""
-        self.config["track_voice_events"] = enabled
-        return self.save_config()
-    
-    def add_keyword(self, keyword):
-        """Add a keyword filter"""
-        if keyword and keyword not in self.config["filter_keywords"]:
-            self.config["filter_keywords"].append(keyword)
+
+    # === Filters ===
+    def get_mention_filter(self) -> bool:
+        """Проверяет, включен ли фильтр упоминаний."""
+        return self.config.get('filter_mentions_only', False)
+
+    def set_mention_filter(self, enabled: bool):
+        """Включает/выключает фильтр упоминаний."""
+        self.config['filter_mentions_only'] = enabled
+        self.save_config()
+
+    def get_keywords(self) -> List[str]:
+        """Получает список ключевых слов."""
+        return self.config.get('filter_keywords', [])
+
+    def add_keyword(self, keyword: str) -> bool:
+        """Добавляет ключевое слово."""
+        keywords = self.get_keywords()
+        if keyword and keyword not in keywords:
+            keywords.append(keyword)
+            self.config['filter_keywords'] = keywords
             return self.save_config()
         return False
-    
-    def remove_keyword(self, keyword):
-        """Remove a keyword filter"""
-        if keyword in self.config["filter_keywords"]:
-            self.config["filter_keywords"].remove(keyword)
+
+    def remove_keyword(self, keyword: str) -> bool:
+        """Удаляет ключевое слово."""
+        keywords = self.get_keywords()
+        if keyword in keywords:
+            keywords.remove(keyword)
+            self.config['filter_keywords'] = keywords
             return self.save_config()
         return False
-    
-    def get_log_content(self, lines=100):
-        """Get last N lines from log file"""
-        try:
-            with open(LOG_FILE, 'r', encoding='utf-8') as f:
-                all_lines = f.readlines()
-                return ''.join(all_lines[-lines:])
-        except IOError:
-            return "Log file not found or cannot be read."
+
+    def get_track_voice_events(self) -> bool:
+        """Проверяет, включено ли отслеживание голосовых событий."""
+        return self.config.get('track_voice_events', True)
+
+    def set_track_voice_events(self, enabled: bool):
+        """Включает/выключает отслеживание голосовых событий."""
+        self.config['track_voice_events'] = enabled
+        self.save_config()
 
 
-# Global config manager instance
+# Глобальный экземпляр
 config_manager = ConfigManager()
