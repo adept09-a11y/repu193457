@@ -1,0 +1,88 @@
+// Black & Red Mobile Theme
+// Adapted from Desktop version
+
+// Backgrounds
+background: #000000;
+chat_background: #000000;
+window: #000000;
+
+// Text Colors
+text: #ffffff;
+hint: #d0d0d0;
+link: #e53935;
+linkVisited: #c62828;
+
+// Messages
+message_in: #161616;
+message_out: #190b0b;
+message_in_text: #f2f2f2;
+message_out_text: #ffffff;
+message_date: #b0b0b0;
+message_date_out: #b0b0b0;
+message_link: #e53935;
+message_reply_in: #d32f2f;
+message_reply_out: #d32f2f;
+message_bar: #171717;
+message_bar_text: #ff6d6d;
+
+// Interface Elements
+button: #d32f2f;
+button_text: #ffffff;
+button_muted: #212121;
+button_muted_text: #ffffff;
+secondary_bg: #0f0f0f;
+header: #000000;
+header_text: #ffffff;
+header_back: #d32f2f;
+accent: #d32f2f;
+active_text: #d32f2f;
+divider: #111111;
+chat_pin_bg: #171717;
+chat_pin_text: #ff6d6d;
+
+// Chat List (Dialogs)
+list: #000000;
+list_text: #ffffff;
+list_subtext: #e6e6e6;
+list_line: #111111;
+list_bg: #000000;
+list_bg_selected: #3d1014;
+list_badge: #d32f2f;
+list_badge_text: #ffffff;
+list_badge_muted: #4d1c1c;
+list_unread: #d32f2f;
+list_unread_text: #ffffff;
+list_search: #000000;
+list_search_text: #ffffff;
+list_search_hint: #b5b5b5;
+
+// Input Area
+input: #000000;
+input_text: #f5f5f5;
+input_hint: #b0b0b0;
+name: #ffffff;
+status: #d0d0d0;
+online: #ff3b30;
+pending: #d32f2f;
+sent: #d32f2f;
+received: #d32f2f;
+read: #d32f2f;
+
+// Media & Icons
+media_icons: #d32f2f;
+track_name: #ffffff;
+track_artist: #d0d0d0;
+placeholder: #b0b0b0;
+popup: #000000;
+popup_text: #ffffff;
+popup_hint: #d0d0d0;
+popup_line: #111111;
+
+// User Name Colors (Peer Colors)
+name_red: #ff3b30;
+name_orange: #ff7043;
+name_violet: #d46c99;
+name_green: #c62828;
+name_cyan: #ff8a80;
+name_blue: #ff6d6d;
+name_pink: #e53935;
