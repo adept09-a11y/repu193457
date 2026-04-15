@@ -1,0 +1,9 @@
+{
+  "telegram_chat_id": "",
+  "discord_owner_id": "",
+  "tracked_users": [],
+  "tracked_guilds": [],
+  "filter_mentions_only": false,
+  "track_voice_events": true,
+  "filter_keywords": []
+}
