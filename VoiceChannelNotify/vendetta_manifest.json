@@ -1,0 +1,9 @@
+{
+    "name": "VoiceChannelNotify",
+    "description": "Sends Telegram notifications when users join selected voice channels",
+    "author": "YourName",
+    "version": "1.0.0",
+    "vencordVersion": ">=1.0.0",
+    "tags": ["notifications", "voice", "telegram"],
+    "main": "index.tsx"
+}
