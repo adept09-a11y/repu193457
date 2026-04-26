@@ -2,18 +2,47 @@
 # Dependencies
 node_modules/
 
-# Build outputs
+# Build artifacts
 dist/
+build/
+*.js.map
+*.ts.map
 
-# Environment variables
+# Environment
 .env
 .env.local
-.env.*
+*.env.*
 
-# TypeScript
-*.tsbuildinfo
-
-# IDE
+# Editors
 .vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
 
+# Logs
+*.log
+
+# Python (if any Python files exist in project)
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.so
+
+# Coverage
+coverage/
+htmlcov/
+.coverage
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Testing
+*.test.js
+*.test.tsx
+*.spec.js
+*.spec.tsx
 ```
