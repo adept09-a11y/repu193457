@@ -1,14 +1,15 @@
-export interface User {
+export interface Account {
   id: string;
-  username: string;
-  passwordHash: string;
-  salt: string;
+  name: string;
+  apiKey: string; // Encrypted
+  provider: 'openai' | 'anthropic' | 'custom';
+  baseUrl?: string;
   createdAt: number;
+  updatedAt: number;
 }
 
 export interface Template {
   id: string;
-  userId: string;
   name: string;
   content: string;
   createdAt: number;
@@ -20,10 +21,14 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
+  accountId?: string;
 }
 
 export interface AppState {
-  currentUser: User | null;
+  accounts: Account[];
+  currentAccountId: string | null;
   templates: Template[];
   currentChat: ChatMessage[];
+  isAccountModalOpen: boolean;
+  isTemplateModalOpen: boolean;
 }

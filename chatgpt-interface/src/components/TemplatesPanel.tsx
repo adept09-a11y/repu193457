@@ -1,15 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { Template } from '../types';
-import { saveTemplate, deleteTemplate, exportTemplates, importTemplates } from '../utils/storage';
-import { generateId } from '../utils/crypto';
 
 interface TemplatesPanelProps {
-  userId: string;
+  templates: Template[];
   onInsertTemplate: (content: string) => void;
+  onSaveTemplate: (template: Omit<Template, 'id' | 'createdAt' | 'updatedAt'>) => void;
+  onUpdateTemplate: (template: Template) => void;
+  onDeleteTemplate: (id: string) => void;
+  onOpenModal: () => void;
 }
 
-export const TemplatesPanel: React.FC<TemplatesPanelProps> = ({ userId, onInsertTemplate }) => {
-  const [templates, setTemplates] = useState<Template[]>([]);
+export const TemplatesPanel: React.FC<TemplatesPanelProps> = ({ 
+  templates, 
+  onInsertTemplate,
+  onSaveTemplate,
+  onUpdateTemplate,
+  onDeleteTemplate,
+  onOpenModal
+}) => {
   const [showForm, setShowForm] = useState(false);
   const [editingTemplate, setEditingTemplate] = useState<Template | null>(null);
   const [name, setName] = useState('');
@@ -17,30 +25,14 @@ export const TemplatesPanel: React.FC<TemplatesPanelProps> = ({ userId, onInsert
   const [showImport, setShowImport] = useState(false);
   const [importText, setImportText] = useState('');
 
-  useEffect(() => {
-    loadTemplates();
-  }, [userId]);
-
-  const loadTemplates = async () => {
-    const { getTemplatesForUser } = await import('../utils/storage');
-    const userTemplates = await getTemplatesForUser(userId);
-    setTemplates(userTemplates);
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     
-    const template: Template = {
-      id: editingTemplate?.id || generateId(),
-      userId,
-      name,
-      content,
-      createdAt: editingTemplate?.createdAt || Date.now(),
-      updatedAt: Date.now(),
-    };
-
-    await saveTemplate(template);
-    await loadTemplates();
+    if (editingTemplate) {
+      onUpdateTemplate({ ...editingTemplate, name, content });
+    } else {
+      onSaveTemplate({ name, content });
+    }
     resetForm();
   };
 
@@ -51,10 +43,9 @@ export const TemplatesPanel: React.FC<TemplatesPanelProps> = ({ userId, onInsert
     setShowForm(true);
   };
 
-  const handleDelete = async (id: string) => {
+  const handleDelete = (id: string) => {
     if (confirm('Are you sure you want to delete this template?')) {
-      await deleteTemplate(id);
-      await loadTemplates();
+      onDeleteTemplate(id);
     }
   };
 
@@ -65,8 +56,8 @@ export const TemplatesPanel: React.FC<TemplatesPanelProps> = ({ userId, onInsert
     setShowForm(false);
   };
 
-  const handleExport = async () => {
-    const json = await exportTemplates(userId);
+  const handleExport = () => {
+    const json = JSON.stringify(templates, null, 2);
     const blob = new Blob([json], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -76,14 +67,23 @@ export const TemplatesPanel: React.FC<TemplatesPanelProps> = ({ userId, onInsert
     URL.revokeObjectURL(url);
   };
 
-  const handleImport = async () => {
-    const count = await importTemplates(userId, importText);
-    if (count > 0) {
-      await loadTemplates();
-      setImportText('');
-      setShowImport(false);
-      alert(`Successfully imported ${count} templates`);
-    } else {
+  const handleImport = () => {
+    try {
+      const imported = JSON.parse(importText);
+      if (Array.isArray(imported)) {
+        imported.forEach((t, index) => {
+          onSaveTemplate({ 
+            name: `${t.name || 'Imported'} ${index + 1}`, 
+            content: t.content 
+          });
+        });
+        setImportText('');
+        setShowImport(false);
+        alert(`Successfully imported ${imported.length} templates`);
+      } else {
+        alert('Invalid format. Expected an array of templates.');
+      }
+    } catch (error) {
       alert('Failed to import templates. Please check the JSON format.');
     }
   };
@@ -93,13 +93,13 @@ export const TemplatesPanel: React.FC<TemplatesPanelProps> = ({ userId, onInsert
       <div style={styles.header}>
         <h2 style={styles.title}>Templates</h2>
         <div style={styles.actions}>
-          <button onClick={() => setShowImport(!showImport)} style={styles.iconButton}>
+          <button onClick={() => setShowImport(!showImport)} style={styles.iconButton} title="Import">
             📥
           </button>
-          <button onClick={handleExport} style={styles.iconButton}>
+          <button onClick={handleExport} style={styles.iconButton} title="Export">
             📤
           </button>
-          <button onClick={() => setShowForm(true)} style={styles.addButton}>
+          <button onClick={onOpenModal} style={styles.addButton}>
             + New
           </button>
         </div>
